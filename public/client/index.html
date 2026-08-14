@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Client Player | ALIVE Hybrid P2P-CDN System</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="glass-container">
+    <header>
+      <div class="header-logo">
+        <div class="pulse-icon orange"></div>
+        <div>
+          <h1>ALIVE Client Node</h1>
+          <span class="header-sub">Distributed Video Streaming Consumer</span>
+        </div>
+      </div>
+      <div class="session-info">
+        <button id="theme-toggle" class="theme-toggle-btn" title="Toggle Light / Dark Mode">
+          <span class="theme-icon" id="theme-icon">☀️</span>
+          <span class="theme-text" id="theme-text">Light Mode</span>
+        </button>
+        <span id="client-id-badge" class="badge blue">Connecting...</span>
+      </div>
+    </header>
+
+    <main class="grid-layout">
+      <!-- Left Column: Video Player and Primary Controls -->
+      <section class="left-panel">
+        <div class="card video-card">
+          <div class="card-header">
+            <h3>Live Stream Feed</h3>
+            <span id="stream-status-badge" class="status-indicator offline">OFFLINE</span>
+          </div>
+          <div class="video-container">
+            <!-- Simulated Video Player -->
+            <div id="video-placeholder" class="video-placeholder">
+              <div class="placeholder-content">
+                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                <p id="placeholder-text">Waiting for Stream to Start...</p>
+              </div>
+            </div>
+            <video id="stream-player" class="stream-player hidden" controls preload="auto" muted></video>
+            
+            <!-- Custom HUD Overlay -->
+            <div id="live-hud" class="live-hud hidden">
+              <span class="hud-item hud-live">● LIVE</span>
+              <span class="hud-item" id="hud-source">Source: -</span>
+              <span class="hud-item" id="hud-thread">Worker Thread: -</span>
+            </div>
+          </div>
+          <div class="stream-controls">
+            <button id="watch-btn" class="btn btn-primary" disabled>Watch Live</button>
+            <button id="disconnect-btn" class="btn btn-danger hidden">Disconnect</button>
+          </div>
+        </div>
+
+        <!-- Notification Banner for Failover / Source Switches -->
+        <div id="failover-banner" class="banner hidden">
+          <div class="banner-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+          </div>
+          <div class="banner-text">
+            <h4>SOURCE CHANGED</h4>
+            <p id="failover-details">Reallocated from Peer-1 to Edge-1 (Reason: Node went offline)</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Column: Source Metadata and Timings -->
+      <section class="right-panel">
+        <!-- Prominent Streaming Source Indicator -->
+        <div class="card source-card">
+          <div class="card-header">
+            <h3>Active Delivery Node</h3>
+          </div>
+          <div class="source-display">
+            <span class="source-label">STREAMING FROM</span>
+            <h2 id="active-source-name">NONE</h2>
+            <div id="source-badge-container">
+              <span id="active-source-type" class="badge">N/A</span>
+              <span id="active-source-latency" class="badge yellow">0 ms</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Connection Timings and Metrics Card -->
+        <div class="card metrics-card">
+          <div class="card-header">
+            <h3>Stream Session Metadata</h3>
+          </div>
+          <div class="metadata-grid">
+            <div class="meta-item">
+              <span class="meta-label">Shared Master Video</span>
+              <span class="meta-val" id="meta-video-name">-</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Worker Thread</span>
+              <span class="meta-val text-primary" id="meta-worker-thread">-</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Request Time</span>
+              <span class="meta-val" id="meta-req-time">-</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Allocation Time</span>
+              <span class="meta-val" id="meta-alloc-time">-</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">VTS Processing Time</span>
+              <span class="meta-val" id="meta-vts-time">-</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Connected Since</span>
+              <span class="meta-val" id="meta-start-time">-</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Live Timeline Position</span>
+              <span class="meta-val" id="meta-live-pos">00:00 / 00:00</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Chunk Delivery</span>
+              <span class="meta-val" id="meta-chunk-info">-</span>
+            </div>
+            <div class="meta-item full-width">
+              <span class="meta-label">Current Streaming Duration</span>
+              <div class="duration-counter">
+                <span id="duration-clock">00:00:00</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Reallocation/Failover Log for Client Node -->
+        <div class="card switch-history-card">
+          <div class="card-header">
+            <h3>Source Switching History</h3>
+          </div>
+          <div class="history-container">
+            <ul id="switch-history-list" class="switch-history-list">
+              <li class="empty-msg">No switching events occurred in this session.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <p>ALIVE Distributed Computing Live Video Streaming Project • Powered by Node.js Worker Threads & WebSockets</p>
+    </footer>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="client.js"></script>
+</body>
+</html>

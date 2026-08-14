@@ -1,0 +1,23 @@
+{
+  "name": "dc-experiments",
+  "version": "1.0.0",
+  "description": "ALIVE-Based Multithreaded Distributed Live Video Streaming System",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node test-vts.js && node test-multithreading.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-fileupload": "^1.5.2",
+    "socket.io": "^4.8.3",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^6.0.1"
+  }
+}

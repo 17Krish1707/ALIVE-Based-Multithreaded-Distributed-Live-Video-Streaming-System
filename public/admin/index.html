@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard | ALIVE Hybrid P2P-CDN System</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="glass-dashboard">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-dot"></div>
+        <h2>ALIVE VTS Admin</h2>
+      </div>
+      <nav>
+        <ul>
+          <li class="active"><a href="#monitoring">System Status</a></li>
+          <li><a href="#deadlock-demo">Deadlock Lab</a></li>
+          <li><a href="/client" target="_blank">Launch Client (Tab)</a></li>
+          <li><a href="/" target="_blank">System Home</a></li>
+        </ul>
+      </nav>
+      <div class="system-health">
+        <span class="label">VTS Port: 6000</span>
+        <span class="label text-success">SQLite Connected</span>
+        <span class="label text-info" id="sidebar-thread-status">Multithreading: Active</span>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="content">
+      <!-- Section: System Monitoring and Live Streaming control -->
+      <section id="monitoring" class="tab-content active">
+        <!-- Top Toolbar -->
+        <header class="content-header">
+          <div>
+            <h1>Distributed System Dashboard</h1>
+            <p class="subtitle">Virtual Tracker Server • Real Worker Threads • Dynamic Source Allocation</p>
+          </div>
+          <div class="header-actions">
+            <!-- Theme Switcher Toggle -->
+            <button id="theme-toggle" class="theme-toggle-btn" title="Toggle Light / Dark Mode">
+              <span class="theme-icon" id="theme-icon">☀️</span>
+              <span class="theme-text" id="theme-text">Light Mode</span>
+            </button>
+            <div class="stream-control-badge">
+              <span id="global-status-indicator" class="status-indicator offline">OFFLINE</span>
+              <span id="global-stream-time" class="time-stamp">00:00:00</span>
+            </div>
+          </div>
+        </header>
+
+        <!-- Top Section Grid: Upload and Global Controls -->
+        <div class="section-grid-2">
+          <!-- Video File Upload Card (Supports up to 1 GB) -->
+          <div class="card card-upload">
+            <div class="card-title">
+              <h3>Live Video Master Upload</h3>
+              <span class="badge blue">Max: 1 GB</span>
+            </div>
+            <div class="upload-zone" id="upload-zone">
+              <input type="file" id="video-file-input" accept="video/mp4" class="hidden">
+              <label for="video-file-input" class="upload-label" id="upload-label">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="17 8 12 3 7 8"></polyline>
+                  <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
+                <span>Click or Drag MP4 Video to Upload</span>
+                <span class="file-limits">Maximum video size: 1 GB</span>
+              </label>
+              <div id="upload-progress-container" class="progress-bar-container hidden">
+                <div class="progress-info-row">
+                  <span id="upload-status-text">Uploading...</span>
+                  <span id="upload-percent-text">0%</span>
+                </div>
+                <div class="progress-track">
+                  <div id="upload-progress-bar" class="progress-bar" style="width: 0%;"></div>
+                </div>
+              </div>
+            </div>
+            <div id="video-details-card" class="video-meta hidden">
+              <div class="meta-row"><strong>Filename:</strong> <span id="meta-filename">-</span></div>
+              <div class="meta-row"><strong>File Size:</strong> <span id="meta-size">-</span></div>
+              <div class="meta-row"><strong>Duration:</strong> <span id="meta-duration">-</span></div>
+              <div class="meta-row"><strong>Uploaded:</strong> <span id="meta-timestamp">-</span></div>
+              <div class="meta-row"><strong>File Type:</strong> <span id="meta-filetype">video/mp4</span></div>
+              <div class="meta-row"><strong>Status:</strong> <span id="meta-status" class="badge green">Upload complete</span></div>
+            </div>
+          </div>
+
+          <!-- Live Broadcast Stream controller -->
+          <div class="card card-controls">
+            <div class="card-title">
+              <h3>Live Broadcast Control</h3>
+            </div>
+            <div class="controls-panel">
+              <div class="control-actions">
+                <button id="start-stream-btn" class="btn btn-success" disabled>Start Live Stream</button>
+                <button id="stop-stream-btn" class="btn btn-danger hidden">Stop Live Stream</button>
+              </div>
+              <div class="stream-info-block">
+                <div class="info-row"><span class="lbl">Active Master Video:</span> <strong id="lbl-active-video">None</strong></div>
+                <div class="info-row"><span class="lbl">Broadcast Started:</span> <span id="lbl-start-time">-</span></div>
+                <div class="info-row"><span class="lbl">Live Elapsed Time:</span> <span id="lbl-elapsed">00:00:00</span></div>
+                <div class="info-row"><span class="lbl">Range Requests:</span> <span class="badge green">HTTP 206 Supported</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Performance Metrics Grid -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <span class="lbl">Total Clients Served</span>
+            <h2 id="metric-total-clients">0</h2>
+          </div>
+          <div class="metric-card">
+            <span class="lbl">Active Streams</span>
+            <h2 id="metric-active-clients">0</h2>
+          </div>
+          <div class="metric-card">
+            <span class="lbl">Avg VTS Response Time</span>
+            <h2 id="metric-avg-vts">0 ms</h2>
+          </div>
+          <div class="metric-card font-highlight">
+            <span class="lbl">Node Failovers</span>
+            <h2 id="metric-switches">0</h2>
+          </div>
+        </div>
+
+        <!-- MULTITHREADING METRICS HUD (New Detailed Concurrency Section) -->
+        <div class="card multithreading-hud-card">
+          <div class="card-title flex-between">
+            <div class="title-with-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
+                <rect x="9" y="9" width="6" height="6"></rect>
+                <line x1="9" y1="1" x2="9" y2="4"></line>
+                <line x1="15" y1="1" x2="15" y2="4"></line>
+                <line x1="9" y1="20" x2="9" y2="23"></line>
+                <line x1="15" y1="20" x2="15" y2="23"></line>
+                <line x1="20" y1="9" x2="23" y2="9"></line>
+                <line x1="20" y1="14" x2="23" y2="14"></line>
+                <line x1="1" y1="9" x2="4" y2="9"></line>
+                <line x1="1" y1="14" x2="4" y2="14"></line>
+              </svg>
+              <h3>Node.js Multithreading Engine</h3>
+            </div>
+            <span class="badge blue" id="mt-main-status">Main Thread: ONLINE</span>
+          </div>
+          <div class="multithreading-metrics-grid">
+            <div class="mt-metric">
+              <span class="mt-label">Active Workers</span>
+              <strong class="mt-val text-primary" id="mt-active-workers">0</strong>
+            </div>
+            <div class="mt-metric">
+              <span class="mt-label">Total Created</span>
+              <strong class="mt-val" id="mt-total-created">0</strong>
+            </div>
+            <div class="mt-metric">
+              <span class="mt-label">Completed</span>
+              <strong class="mt-val text-success" id="mt-completed-workers">0</strong>
+            </div>
+            <div class="mt-metric">
+              <span class="mt-label">Failed</span>
+              <strong class="mt-val text-danger" id="mt-failed-workers">0</strong>
+            </div>
+            <div class="mt-metric">
+              <span class="mt-label">Avg Execution</span>
+              <strong class="mt-val" id="mt-avg-exec">0 ms</strong>
+            </div>
+            <div class="mt-metric">
+              <span class="mt-label">Longest Execution</span>
+              <strong class="mt-val" id="mt-longest-exec">0 ms</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- Middle Section Grid: Topology and Source Nodes -->
+        <div class="section-grid-2">
+          <!-- Topology Diagram Canvas -->
+          <div class="card canvas-card">
+            <div class="card-title">
+              <h3>Live P2P-CDN Network Topology</h3>
+            </div>
+            <div class="canvas-wrapper">
+              <canvas id="topology-canvas" width="550" height="350"></canvas>
+            </div>
+          </div>
+
+          <!-- Distributed Video Source Load Cards -->
+          <div class="card sources-card">
+            <div class="card-title">
+              <h3>Distributed Delivery Sources</h3>
+            </div>
+            <div class="sources-list" id="sources-container">
+              <!-- Dynamically populated from admin.js -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Real-Time Threads and Client Allocation Table Grid -->
+        <div class="section-grid-large-small">
+          <!-- Active Client Sessions Table -->
+          <div class="card table-card">
+            <div class="card-title">
+              <h3>Active Client Allocations</h3>
+            </div>
+            <div class="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Client ID</th>
+                    <th>Device/IP</th>
+                    <th>Request Time</th>
+                    <th>Allocated Node</th>
+                    <th>Latency</th>
+                    <th>Start Time</th>
+                    <th>Duration</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="client-table-body">
+                  <tr>
+                    <td colspan="8" class="text-center font-italic text-muted">No active streaming sessions.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Server Concurrency Threads Visualization Panel -->
+          <div class="card threads-card">
+            <div class="card-title">
+              <h3>Worker Concurrency Pipeline</h3>
+            </div>
+            <div class="threads-list" id="threads-container">
+              <div class="empty-state text-muted font-italic">No active concurrent worker threads.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Logs and Switch History -->
+        <div class="section-grid-2">
+          <!-- VTS Console log -->
+          <div class="card console-card">
+            <div class="card-title">
+              <h3>Real-Time VTS Logging Console</h3>
+            </div>
+            <div class="console-box" id="console-logs">
+              <!-- Logs appended dynamically -->
+            </div>
+          </div>
+
+          <!-- Failover Allocation Switch History -->
+          <div class="card history-card">
+            <div class="card-title">
+              <h3>VTS Source Allocations History</h3>
+            </div>
+            <div class="history-list-wrapper">
+              <ul id="allocation-history-list" class="history-list">
+                <li class="empty-msg text-muted font-italic">No historical allocations recorded.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section: Deadlock Demonstration Laboratory -->
+      <section id="deadlock-demo" class="tab-content">
+        <header class="content-header">
+          <div>
+            <h1>Isolated Deadlock Demonstration Lab</h1>
+            <p class="subtitle">Evaluate circular wait conditions and deadlock avoidance algorithms.</p>
+          </div>
+          <div class="header-actions">
+            <button id="theme-toggle-deadlock" class="theme-toggle-btn" title="Toggle Light / Dark Mode">
+              <span class="theme-icon">☀️</span>
+              <span class="theme-text">Light Mode</span>
+            </button>
+          </div>
+        </header>
+
+        <div class="section-grid-2">
+          <!-- Left Panel: Deadlock Trigger controls -->
+          <div class="card">
+            <div class="card-title">
+              <h3>Resource Deadlock Control Panel</h3>
+            </div>
+            <div class="deadlock-controls">
+              <div class="control-group">
+                <h4>Run Experiment</h4>
+                <div class="btn-cluster">
+                  <button id="dl-btn-unsafe" class="btn btn-danger">Simulate Deadlock (Circular Wait)</button>
+                  <button id="dl-btn-safe-order" class="btn btn-success">Simulate Safe (Resource Ordering)</button>
+                  <button id="dl-btn-safe-timeout" class="btn btn-primary">Simulate Safe (Lock Timeouts)</button>
+                  <button id="dl-btn-reset" class="btn btn-grey">Reset Simulation</button>
+                </div>
+              </div>
+              <div class="deadlock-guide">
+                <div class="guide-item">
+                  <strong>Circular Wait:</strong> Worker-1 locks Peer-1 then waits for Edge-1. Worker-2 locks Edge-1 then waits for Peer-1. Results in infinite block.
+                </div>
+                <div class="guide-item">
+                  <strong>Resource Ordering:</strong> Forces both workers to lock Peer-1 first, then Edge-1. Worker-2 blocks until Worker-1 releases Peer-1. No deadlock.
+                </div>
+                <div class="guide-item">
+                  <strong>Lock Timeout:</strong> Workers release their lock if the second lock cannot be acquired within 1.5s, allowing the other worker to finish.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Panel: Lock Visualizer HUD -->
+          <div class="card">
+            <div class="card-title">
+              <h3>Shared Lock State Visualization</h3>
+            </div>
+            
+            <!-- Warning Banner -->
+            <div id="deadlock-warning" class="deadlock-banner hidden">
+              <div class="warning-header">⚠️ DEADLOCK DETECTED!</div>
+              <p>Workers are in a circular lock cycle (Mutual Wait). Infinite block has occurred.</p>
+            </div>
+
+            <!-- Lock Nodes visualizer grid -->
+            <div class="lock-visualizer">
+              <div class="worker-node-status" id="dl-w1-card">
+                <h5>Worker-1 Thread</h5>
+                <p>Status: <span id="dl-w1-status" class="badge grey">Idle</span></p>
+                <div class="lock-bar">
+                  Holds: <strong id="dl-w1-holds" class="text-secondary">-</strong>
+                </div>
+                <div class="lock-bar">
+                  Waits For: <strong id="dl-w1-waits" class="text-secondary">-</strong>
+                </div>
+              </div>
+              
+              <div class="resource-nodes">
+                <div class="res-node" id="dl-res-peer1">
+                  <span>Peer-1</span>
+                  <span id="dl-res-peer1-lock" class="badge green">FREE</span>
+                </div>
+                <div class="res-node" id="dl-res-edge1">
+                  <span>Edge-1</span>
+                  <span id="dl-res-edge1-lock" class="badge green">FREE</span>
+                </div>
+              </div>
+
+              <div class="worker-node-status" id="dl-w2-card">
+                <h5>Worker-2 Thread</h5>
+                <p>Status: <span id="dl-w2-status" class="badge grey">Idle</span></p>
+                <div class="lock-bar">
+                  Holds: <strong id="dl-w2-holds" class="text-secondary">-</strong>
+                </div>
+                <div class="lock-bar">
+                  Waits For: <strong id="dl-w2-waits" class="text-secondary">-</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="admin.js"></script>
+</body>
+</html>
