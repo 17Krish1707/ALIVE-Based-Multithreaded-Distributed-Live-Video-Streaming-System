@@ -17,4 +17,4 @@
 //   4. Commit and push — Vercel auto-deploys the updated frontend
 // ============================================================
 
-window.ALIVE_BACKEND_URL = '';
+window.ALIVE_BACKEND_URL = 'https://alive-based-multithreaded-distributed-s5kd.onrender.com';
