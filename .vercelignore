@@ -1,0 +1,8 @@
+node_modules/
+temp/
+uploads/
+*.pdf
+*.mp4
+database.db
+*.class
+.git
