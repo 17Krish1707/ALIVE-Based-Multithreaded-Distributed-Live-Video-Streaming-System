@@ -309,11 +309,22 @@ function handleUpload(file) {
     return;
   }
 
+  // Vercel Serverless Function 4.5 MB Payload Limit Check
+  const isVercel = window.location.hostname.includes('vercel.app');
+  const VERCEL_MAX_PAYLOAD = 4.5 * 1024 * 1024; // 4.5 MB
+  if (isVercel && file.size > VERCEL_MAX_PAYLOAD) {
+    alert(`[Vercel Deployment Notice]\nVercel Serverless Functions limit file uploads to 4.5 MB (Selected file: ${formatBytes(file.size)}).\n\nRegistering video metadata fallback automatically. For full 1 GB video uploads, WebSockets, and multithreaded streaming, deploy to a Node server host like Render or Railway.`);
+  }
+
   let handled = false;
   const triggerSend = (dur) => {
     if (handled) return;
     handled = true;
-    sendUpload(file, dur);
+    if (isVercel && file.size > VERCEL_MAX_PAYLOAD) {
+      fallbackRegister(file, dur);
+    } else {
+      sendUpload(file, dur);
+    }
   };
 
   // Read exact duration from video metadata in browser with fallback timer
@@ -376,6 +387,10 @@ function sendUpload(file, exactDuration) {
       } catch (e) {
         fallbackRegister(file, exactDuration);
       }
+    } else if (xhr.status === 413) {
+      console.warn('Payload too large (413). Vercel serverless functions limit request bodies to 4.5 MB. Falling back to serverless registration...');
+      alert(`Upload notice: Server returned 413 Payload Too Large (Vercel Serverless Function 4.5 MB limit).\nFalling back to video metadata registration...`);
+      fallbackRegister(file, exactDuration);
     } else {
       console.warn(`Upload endpoint returned status ${xhr.status}. Falling back to registration...`);
       fallbackRegister(file, exactDuration);
