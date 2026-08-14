@@ -309,9 +309,17 @@ socket.on('stream_error', (data) => {
 watchBtn.addEventListener('click', () => {
   watchBtn.disabled = true;
   watchBtn.textContent = 'Requesting Source...';
-  if (socket && socket.emit) {
-    try { socket.emit('watch_live'); } catch (e) {}
+
+  // Use WebSocket if connected, otherwise fallback to REST API (prevents double allocation)
+  if (socket && socket.connected) {
+    try { 
+      socket.emit('watch_live'); 
+      return;
+    } catch (e) {
+      console.warn('Socket watch_live failed, falling back to HTTP REST API:', e);
+    }
   }
+
   fetch(apiUrl('/api/stream/watch'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -335,14 +343,17 @@ watchBtn.addEventListener('click', () => {
 
 // Disconnect watch session
 disconnectBtn.addEventListener('click', () => {
-  if (socket && socket.emit) {
-    try { socket.emit('disconnect_stream'); } catch (e) {}
+  if (socket && socket.connected) {
+    try { 
+      socket.emit('disconnect_stream'); 
+    } catch (e) {}
+  } else {
+    fetch(apiUrl('/api/stream/disconnect'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId })
+    }).catch(() => {});
   }
-  fetch(apiUrl('/api/stream/disconnect'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ clientId })
-  }).catch(() => {});
   resetPlayerUI();
 });
 
