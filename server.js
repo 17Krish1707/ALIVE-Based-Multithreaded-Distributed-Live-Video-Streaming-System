@@ -1357,24 +1357,23 @@ function checkForDeadlock() {
 // INITIALIZE & START
 // ============================================================
 
-if (!process.env.VERCEL) {
-  initDB().then(() => {
-    logEvent('Database initialized successfully.');
-    server.listen(PORT, '0.0.0.0', () => {
-      console.log();
-      console.log('============================================================');
-      console.log('  ALIVE Hybrid P2P-CDN Video Streaming System Backend started');
-      console.log('============================================================');
-      console.log(`  Express server running on: http://localhost:${PORT}`);
-      console.log(`  Max Upload File Size: 1 GB (1024 MB)`);
-      console.log(`  Multithreading Engine: Node.js worker_threads Enabled`);
-      console.log(`  HTTP 206 Range Stream: /video/:filename Enabled`);
-      console.log('============================================================');
-      console.log();
-    });
-  }).catch(err => {
-    console.error('Failed to initialize database:', err);
+initDB().then(() => {
+  logEvent('Database initialized successfully.');
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log();
+    console.log('============================================================');
+    console.log('  ALIVE Hybrid P2P-CDN Video Streaming System Backend started');
+    console.log('============================================================');
+    console.log(`  Express server running on port: ${PORT}`);
+    console.log(`  Max Upload File Size: 1 GB (1024 MB)`);
+    console.log(`  Multithreading Engine: Node.js worker_threads Enabled`);
+    console.log(`  HTTP 206 Range Stream: /video/:filename Enabled`);
+    console.log(`  Socket.io: ONLINE (WebSocket + Polling)`);
+    console.log('============================================================');
+    console.log();
   });
-}
+}).catch(err => {
+  console.error('Failed to initialize database:', err);
+});
 
 export default app;

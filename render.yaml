@@ -1,0 +1,17 @@
+# render.yaml — Render.com One-Click Deploy Config
+# Deploy this backend at: https://dashboard.render.com/select-repo
+# Select "Use render.yaml" when prompted
+
+services:
+  - type: web
+    name: alive-vts-backend
+    env: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+    # Render automatically sets PORT — server.js reads it via:
+    # process.env.PORT || process.env.SERVER_PORT || 6000

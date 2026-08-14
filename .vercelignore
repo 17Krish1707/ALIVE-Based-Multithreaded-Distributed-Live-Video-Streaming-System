@@ -6,3 +6,13 @@ uploads/
 database.db
 *.class
 .git
+api/
+server.js
+db.js
+worker.js
+test-vts.js
+test-multithreading.js
+download-sample.js
+*.java
+sample_live_video.mp4
+render.yaml
