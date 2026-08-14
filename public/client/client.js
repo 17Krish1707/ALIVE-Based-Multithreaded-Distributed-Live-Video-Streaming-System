@@ -158,7 +158,7 @@ socket.on('stream_terminated', () => {
 });
 
 // VTS Source Allocation
-socket.on('source_allocated', (data) => {
+function handleSourceAllocation(data) {
   console.log('Source allocated by Virtual Tracker Server:', data);
   currentSourceId = data.sourceId;
   
@@ -168,22 +168,22 @@ socket.on('source_allocated', (data) => {
   
   // Style Source Type badge
   activeSourceType.className = 'badge';
-  if (data.sourceType.toLowerCase().includes('peer')) {
+  if (data.sourceType && data.sourceType.toLowerCase().includes('peer')) {
     activeSourceType.classList.add('green');
-  } else if (data.sourceType.toLowerCase().includes('edge')) {
+  } else if (data.sourceType && data.sourceType.toLowerCase().includes('edge')) {
     activeSourceType.classList.add('blue');
   } else {
     activeSourceType.classList.add('purple');
   }
   
-  activeSourceLatency.textContent = `${data.latency} ms`;
+  activeSourceLatency.textContent = `${data.latency || 0} ms`;
   hudSource.textContent = `Source: ${data.sourceId}`;
   
   // Update Timings Metadata
   metaVideoName.textContent = data.videoName;
   metaReqTime.textContent = formatTimestamp(data.requestTime);
   metaAllocTime.textContent = formatTimestamp(data.allocationTime);
-  metaVtsTime.textContent = `${data.processingTimeMs} ms`;
+  metaVtsTime.textContent = `${data.processingTimeMs || 0} ms`;
   metaStartTime.textContent = formatTimestamp(data.allocationTime);
   metaWorkerThread.textContent = 'Spawning...';
 
@@ -213,6 +213,10 @@ socket.on('source_allocated', (data) => {
   
   // Start Timers
   startDurationTimer();
+}
+
+socket.on('source_allocated', (data) => {
+  handleSourceAllocation(data);
 });
 
 // Real-Time Worker Thread Chunk Feed
@@ -274,12 +278,40 @@ socket.on('stream_error', (data) => {
 watchBtn.addEventListener('click', () => {
   watchBtn.disabled = true;
   watchBtn.textContent = 'Requesting Source...';
-  socket.emit('watch_live');
+  if (socket && socket.emit) {
+    try { socket.emit('watch_live'); } catch (e) {}
+  }
+  fetch('/api/stream/watch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clientId })
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success && data.sourceId) {
+        handleSourceAllocation(data);
+      } else if (data.error) {
+        alert(data.error);
+        watchBtn.disabled = false;
+        watchBtn.textContent = 'Watch Live';
+      }
+    })
+    .catch(() => {
+      watchBtn.disabled = false;
+      watchBtn.textContent = 'Watch Live';
+    });
 });
 
 // Disconnect watch session
 disconnectBtn.addEventListener('click', () => {
-  socket.emit('disconnect_stream');
+  if (socket && socket.emit) {
+    try { socket.emit('disconnect_stream'); } catch (e) {}
+  }
+  fetch('/api/stream/disconnect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clientId })
+  }).catch(() => {});
   resetPlayerUI();
 });
 

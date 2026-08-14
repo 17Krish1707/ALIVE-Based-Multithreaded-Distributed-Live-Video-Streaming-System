@@ -97,6 +97,14 @@ app.get('/favicon.ico', (req, res) => {
 });
 
 // Serve static frontend files
+app.get(['/client', '/client/'], (req, res) => {
+  res.sendFile(path.join(process.cwd(), 'public', 'client', 'index.html'));
+});
+
+app.get(['/admin', '/admin/'], (req, res) => {
+  res.sendFile(path.join(process.cwd(), 'public', 'admin', 'index.html'));
+});
+
 app.use(express.static(path.join(process.cwd(), 'public')));
 app.use('/uploads', express.static(UPLOADS_DIR, {
   acceptRanges: true,
@@ -469,6 +477,141 @@ app.post('/api/register-video', async (req, res) => {
   } catch (err) {
     console.error('[SERVER] Video registration error:', err);
     res.status(500).json({ error: err.message || 'Registration failed' });
+  }
+});
+
+// REST API Stream Control Endpoints
+app.post('/api/stream/start', async (req, res) => {
+  try {
+    const video = await getLatestVideo();
+    if (!video) {
+      return res.status(400).json({ success: false, error: 'Upload a video file first.' });
+    }
+    const startedAt = await startLiveStream(video.id);
+    logEvent('Admin started the LIVE video broadcast.');
+    const streamData = {
+      status: 'LIVE',
+      startedAt,
+      videoName: video.filepath || video.filename,
+      videoDuration: video.duration
+    };
+    io.emit('stream_status_change', streamData);
+    res.json({ success: true, stream: streamData });
+  } catch (err) {
+    console.error('[REST] stream start error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/stream/stop', async (req, res) => {
+  try {
+    await stopLiveStream();
+    logEvent('Admin stopped the video broadcast.');
+    io.emit('stream_status_change', { status: 'OFFLINE' });
+
+    for (const [clientId, info] of activeWorkers.entries()) {
+      if (info.worker) {
+        try { info.worker.terminate(); } catch (e) {}
+      }
+      activeWorkers.delete(clientId);
+      const session = await getClientSession(clientId);
+      if (session && session.current_source) {
+        const dur = session.stream_start_time ? Math.round((Date.now() - new Date(session.stream_start_time).getTime()) / 1000) : 0;
+        await releaseSourceAllocation(clientId, session.current_source, new Date().toISOString(), dur);
+      }
+      await updateClientSession(clientId, 'COMPLETED', { disconnect_time: new Date().toISOString() });
+    }
+    sources.forEach(s => s.connected = 0);
+    io.to('admins').emit('source_update', sources);
+
+    res.json({ success: true, status: 'OFFLINE' });
+  } catch (err) {
+    console.error('[REST] stream stop error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/stream/watch', async (req, res) => {
+  try {
+    const { clientId: rawClientId } = req.body || {};
+    const clientSessionId = rawClientId || `CLIENT-${Math.floor(1000 + Math.random() * 9000)}`;
+    const requestTime = new Date().toISOString();
+
+    await updateClientSession(clientSessionId, 'REQUESTING', { request_time: requestTime });
+
+    const stream = await getStreamStatus();
+    if (!stream || stream.status !== 'LIVE') {
+      await updateClientSession(clientSessionId, 'FAILED');
+      return res.status(400).json({ success: false, error: 'Stream is OFFLINE' });
+    }
+
+    const startTime = Date.now();
+    const source = selectBestSource();
+
+    if (!source) {
+      await updateClientSession(clientSessionId, 'FAILED');
+      return res.status(503).json({ success: false, error: 'All distributed sources are at capacity.' });
+    }
+
+    const allocationTime = Date.now();
+    const processingTime = allocationTime - startTime;
+    source.connected++;
+    source.totalRequests++;
+
+    logEvent(`Allocating ${source.name} (Type: ${source.type}, Latency: ${source.latency}ms) for ${clientSessionId}. VTS Processing: ${processingTime}ms`);
+
+    await updateClientSession(clientSessionId, 'STREAMING', {
+      allocation_time: new Date(allocationTime).toISOString(),
+      stream_start_time: new Date(allocationTime).toISOString(),
+      current_source: source.id,
+      processing_time_ms: processingTime
+    });
+
+    await addSourceAllocation(clientSessionId, source.id, source.type, new Date(allocationTime).toISOString());
+
+    const allocationData = {
+      success: true,
+      sourceId: source.id,
+      sourceType: source.type,
+      latency: source.latency,
+      requestTime,
+      allocationTime: new Date(allocationTime).toISOString(),
+      processingTimeMs: processingTime,
+      videoName: stream.filepath || stream.filename,
+      videoDuration: stream.duration,
+      streamStartedAt: stream.started_at
+    };
+
+    io.to('admins').emit('source_update', sources);
+    io.to('admins').emit('client_list_update', await getAllSessions());
+    io.to('admins').emit('metrics_update', await getPerformanceMetrics());
+
+    res.json(allocationData);
+  } catch (err) {
+    console.error('[REST] stream watch error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/stream/disconnect', async (req, res) => {
+  try {
+    const { clientId } = req.body || {};
+    if (clientId) {
+      const session = await getClientSession(clientId);
+      if (session && session.current_source) {
+        const src = sources.find(s => s.id === session.current_source);
+        if (src && src.connected > 0) src.connected--;
+        const dur = session.stream_start_time ? Math.round((Date.now() - new Date(session.stream_start_time).getTime()) / 1000) : 0;
+        await releaseSourceAllocation(clientId, session.current_source, new Date().toISOString(), dur);
+      }
+      await updateClientSession(clientId, 'COMPLETED', { disconnect_time: new Date().toISOString() });
+      io.to('admins').emit('source_update', sources);
+      io.to('admins').emit('client_list_update', await getAllSessions());
+      io.to('admins').emit('metrics_update', await getPerformanceMetrics());
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

@@ -424,11 +424,41 @@ function resetUploadZone() {
 // ============================================================
 
 startStreamBtn.addEventListener('click', () => {
-  socket.emit('toggle_stream', { action: 'START' });
+  startStreamBtn.disabled = true;
+  if (socket && socket.emit) {
+    try { socket.emit('toggle_stream', { action: 'START' }); } catch (e) {}
+  }
+  fetch('/api/stream/start', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      startStreamBtn.disabled = false;
+      if (data.success && data.stream) {
+        updateStreamControlUI(data.stream);
+      } else if (data.error) {
+        alert(data.error);
+      }
+    })
+    .catch(() => {
+      startStreamBtn.disabled = false;
+    });
 });
 
 stopStreamBtn.addEventListener('click', () => {
-  socket.emit('toggle_stream', { action: 'STOP' });
+  stopStreamBtn.disabled = true;
+  if (socket && socket.emit) {
+    try { socket.emit('toggle_stream', { action: 'STOP' }); } catch (e) {}
+  }
+  fetch('/api/stream/stop', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      stopStreamBtn.disabled = false;
+      if (data.success) {
+        updateStreamControlUI({ status: 'OFFLINE' });
+      }
+    })
+    .catch(() => {
+      stopStreamBtn.disabled = false;
+    });
 });
 
 function updateStreamControlUI(stream) {
