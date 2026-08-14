@@ -7,3 +7,5 @@ database.db
 *.class
 .DS_Store
 Thumbs.db
+
+.vercel
