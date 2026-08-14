@@ -6,8 +6,10 @@ import path from 'path';
 import fs from 'fs';
 import { Worker } from 'worker_threads';
 import dotenv from 'dotenv';
+import os from 'os';
 import { 
   initDB, 
+  ensureDB,
   saveVideo, 
   getLatestVideo, 
   startLiveStream, 
@@ -39,16 +41,34 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.SERVER_PORT || 6000;
-const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
-const TEMP_DIR = path.join(process.cwd(), 'temp');
+const UPLOADS_DIR = process.env.VERCEL
+  ? path.join(os.tmpdir(), 'uploads')
+  : path.join(process.cwd(), 'uploads');
+const TEMP_DIR = process.env.VERCEL
+  ? path.join(os.tmpdir(), 'temp')
+  : path.join(process.cwd(), 'temp');
 
-// Ensure uploads & temp directories exist
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+// Ensure uploads & temp directories exist safely
+try {
+  if (!fs.existsSync(UPLOADS_DIR)) {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(TEMP_DIR)) {
+    fs.mkdirSync(TEMP_DIR, { recursive: true });
+  }
+} catch (err) {
+  console.error('[SERVER] Directory creation notice:', err.message);
 }
-if (!fs.existsSync(TEMP_DIR)) {
-  fs.mkdirSync(TEMP_DIR, { recursive: true });
-}
+
+// Database initialization middleware for serverless invocations
+app.use(async (req, res, next) => {
+  try {
+    await ensureDB();
+  } catch (err) {
+    console.error('[SERVER] DB ensure notice:', err.message);
+  }
+  next();
+});
 
 // 1 GB Max Upload Limit Configuration
 const MAX_UPLOAD_SIZE = 1024 * 1024 * 1024; // 1 GB (1073741824 bytes)
@@ -1092,22 +1112,24 @@ function checkForDeadlock() {
 // INITIALIZE & START
 // ============================================================
 
-initDB().then(() => {
-  logEvent('Database initialized successfully.');
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log();
-    console.log('============================================================');
-    console.log('  ALIVE Hybrid P2P-CDN Video Streaming System Backend started');
-    console.log('============================================================');
-    console.log(`  Express server running on: http://localhost:${PORT}`);
-    console.log(`  Max Upload File Size: 1 GB (1024 MB)`);
-    console.log(`  Multithreading Engine: Node.js worker_threads Enabled`);
-    console.log(`  HTTP 206 Range Stream: /video/:filename Enabled`);
-    console.log('============================================================');
-    console.log();
+if (!process.env.VERCEL) {
+  initDB().then(() => {
+    logEvent('Database initialized successfully.');
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log();
+      console.log('============================================================');
+      console.log('  ALIVE Hybrid P2P-CDN Video Streaming System Backend started');
+      console.log('============================================================');
+      console.log(`  Express server running on: http://localhost:${PORT}`);
+      console.log(`  Max Upload File Size: 1 GB (1024 MB)`);
+      console.log(`  Multithreading Engine: Node.js worker_threads Enabled`);
+      console.log(`  HTTP 206 Range Stream: /video/:filename Enabled`);
+      console.log('============================================================');
+      console.log();
+    });
+  }).catch(err => {
+    console.error('Failed to initialize database:', err);
   });
-}).catch(err => {
-  console.error('Failed to initialize database:', err);
-});
+}
 
 export default app;

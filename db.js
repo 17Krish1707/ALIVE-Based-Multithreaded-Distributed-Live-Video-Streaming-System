@@ -1,12 +1,19 @@
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import path from 'path';
+import os from 'os';
 
 let db;
+let dbInitialized = false;
+let dbInitPromise = null;
 
 export async function initDB() {
+  const dbPath = process.env.VERCEL
+    ? path.join(os.tmpdir(), 'database.db')
+    : path.join(process.cwd(), 'database.db');
+
   db = await open({
-    filename: path.join(process.cwd(), 'database.db'),
+    filename: dbPath,
     driver: sqlite3.Database
   });
 
@@ -72,6 +79,24 @@ export async function initDB() {
   // Clear previous active client sessions on restart to ensure clean logs
   await db.run("UPDATE client_sessions SET status = 'DISCONNECTED', disconnect_time = ? WHERE status NOT IN ('DISCONNECTED', 'COMPLETED', 'FAILED')", [new Date().toISOString()]);
 
+  return db;
+}
+
+export async function ensureDB() {
+  if (!dbInitialized) {
+    if (!dbInitPromise) {
+      dbInitPromise = initDB()
+        .then(() => {
+          dbInitialized = true;
+        })
+        .catch((err) => {
+          dbInitPromise = null;
+          console.error('[DB] initDB error:', err);
+          throw err;
+        });
+    }
+    await dbInitPromise;
+  }
   return db;
 }
 
