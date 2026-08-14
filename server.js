@@ -157,18 +157,23 @@ app.get('/video/:filename', async (req, res) => {
   // 4. Fallback: Check for any mp4 file in UPLOADS_DIR or sample_live_video.mp4
   if (!fs.existsSync(filePath)) {
     try {
-      const uploadedMp4s = fs.readdirSync(UPLOADS_DIR).filter(f => f.toLowerCase().endsWith('.mp4'));
-      if (uploadedMp4s.length > 0) {
-        uploadedMp4s.sort((a, b) => fs.statSync(path.join(UPLOADS_DIR, b)).mtimeMs - fs.statSync(path.join(UPLOADS_DIR, a)).mtimeMs);
-        filePath = path.join(UPLOADS_DIR, uploadedMp4s[0]);
-      } else {
-        const samplePath = path.join(process.cwd(), 'sample_live_video.mp4');
-        if (fs.existsSync(samplePath)) {
-          filePath = samplePath;
+      if (fs.existsSync(UPLOADS_DIR)) {
+        const uploadedMp4s = fs.readdirSync(UPLOADS_DIR).filter(f => f.toLowerCase().endsWith('.mp4'));
+        if (uploadedMp4s.length > 0) {
+          uploadedMp4s.sort((a, b) => fs.statSync(path.join(UPLOADS_DIR, b)).mtimeMs - fs.statSync(path.join(UPLOADS_DIR, a)).mtimeMs);
+          filePath = path.join(UPLOADS_DIR, uploadedMp4s[0]);
         }
       }
     } catch (err) {
       console.error('[VIDEO ROUTE] Fallback file search error:', err);
+    }
+  }
+
+  // 5. Final Fallback: Always serve sample_live_video.mp4 if file is missing
+  if (!fs.existsSync(filePath)) {
+    const samplePath = path.join(process.cwd(), 'sample_live_video.mp4');
+    if (fs.existsSync(samplePath)) {
+      filePath = samplePath;
     }
   }
 
