@@ -87,6 +87,15 @@ app.use(fileUpload({
   }
 }));
 
+// Socket.io client script fallback route & Favicon route
+app.get('/socket.io/socket.io.js', (req, res) => {
+  res.redirect('https://cdn.socket.io/4.7.5/socket.io.min.js');
+});
+
+app.get('/favicon.ico', (req, res) => {
+  res.status(204).end();
+});
+
 // Serve static frontend files
 app.use(express.static(path.join(process.cwd(), 'public')));
 app.use('/uploads', express.static(UPLOADS_DIR, {

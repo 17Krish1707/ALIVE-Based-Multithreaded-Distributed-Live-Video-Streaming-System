@@ -57,7 +57,9 @@ navLinks.forEach((link) => {
 // ============================================================
 // SOCKET.IO & DOM ELEMENTS
 // ============================================================
-const socket = io(window.location.origin);
+const socket = typeof io !== 'undefined'
+  ? io(window.location.origin, { transports: ['websocket', 'polling'] })
+  : { on: () => {}, emit: () => {} };
 
 // Elements
 const globalStatus = document.getElementById('global-status-indicator');

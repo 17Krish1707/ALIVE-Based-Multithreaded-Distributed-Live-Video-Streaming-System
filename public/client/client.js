@@ -41,7 +41,9 @@ if (!clientId) {
   localStorage.setItem('alive_client_id', clientId);
 }
 
-const socket = io(window.location.origin);
+const socket = typeof io !== 'undefined'
+  ? io(window.location.origin, { transports: ['websocket', 'polling'] })
+  : { on: () => {}, emit: () => {} };
 
 // DOM Elements
 const clientIdBadge = document.getElementById('client-id-badge');
