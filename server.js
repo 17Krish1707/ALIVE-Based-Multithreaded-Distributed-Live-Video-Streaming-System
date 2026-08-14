@@ -40,7 +40,7 @@ const io = new Server(server, {
   }
 });
 
-const PORT = process.env.SERVER_PORT || 6000;
+const PORT = process.env.PORT || process.env.SERVER_PORT || 6000;
 const UPLOADS_DIR = process.env.VERCEL
   ? path.join(os.tmpdir(), 'uploads')
   : path.join(process.cwd(), 'uploads');
@@ -59,6 +59,18 @@ try {
 } catch (err) {
   console.error('[SERVER] Directory creation notice:', err.message);
 }
+
+// Global CORS Middleware
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Range, Authorization');
+  res.header('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length, Content-Type');
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
 
 // Database initialization middleware for serverless invocations
 app.use(async (req, res, next) => {

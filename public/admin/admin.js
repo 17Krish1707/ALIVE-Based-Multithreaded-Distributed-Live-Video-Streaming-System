@@ -55,10 +55,33 @@ navLinks.forEach((link) => {
 });
 
 // ============================================================
-// SOCKET.IO & DOM ELEMENTS
+// BACKEND URL RESOLUTION & SOCKET.IO INITIALIZATION
 // ============================================================
+function getBackendUrl() {
+  if (typeof window !== 'undefined') {
+    if (window.ALIVE_BACKEND_URL) return window.ALIVE_BACKEND_URL;
+    const stored = localStorage.getItem('alive_backend_url');
+    if (stored) return stored;
+    return window.location.origin;
+  }
+  return '';
+}
+
+function apiUrl(path) {
+  const base = getBackendUrl();
+  return base ? `${base.replace(/\/$/, '')}${path}` : path;
+}
+
+const BACKEND_URL = getBackendUrl();
 const socket = typeof io !== 'undefined'
-  ? io(window.location.origin, { transports: ['websocket', 'polling'] })
+  ? io(BACKEND_URL, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000
+    })
   : { on: () => {}, emit: () => {} };
 
 // Elements
@@ -135,6 +158,7 @@ const dlResPeer1Lock = document.getElementById('dl-res-peer1-lock');
 const dlResEdge1Lock = document.getElementById('dl-res-edge1-lock');
 
 // State Variables
+let uploadedVideo = null;
 let sourcesState = [];
 let clientsState = [];
 let activeStream = null;
@@ -146,8 +170,16 @@ let canvasAnimId = null;
 // ============================================================
 
 socket.on('connect', () => {
-  console.log('Admin socket connected to VTS');
+  console.log('[SOCKET] Admin connected to backend:', BACKEND_URL, 'Socket ID:', socket.id);
   socket.emit('admin_register');
+});
+
+socket.on('connect_error', (err) => {
+  console.warn('[SOCKET] Real-time connection notice:', err.message, 'Target:', BACKEND_URL);
+});
+
+socket.on('disconnect', (reason) => {
+  console.log('[SOCKET] Disconnected:', reason);
 });
 
 socket.on('admin_init', (data) => {
@@ -177,9 +209,9 @@ socket.on('admin_init', (data) => {
   updateStreamControlUI(data.status);
 });
 
-// Periodic HTTP REST Polling Fallback (For serverless environments without persistent WebSockets)
+// Periodic HTTP REST Polling
 function pollStreamInfo() {
-  fetch('/api/stream-info')
+  fetch(apiUrl('/api/stream-info'))
     .then(r => r.json())
     .then(data => {
       if (data.sources) updateSourcesUI(data.sources);
@@ -325,7 +357,7 @@ function sendUpload(file, exactDuration) {
   uploadStatusText.textContent = 'Uploading... 0%';
 
   const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/upload', true);
+  xhr.open('POST', apiUrl('/api/upload'), true);
 
   xhr.upload.onprogress = (e) => {
     if (e.lengthComputable) {
@@ -345,13 +377,13 @@ function sendUpload(file, exactDuration) {
         fallbackRegister(file, exactDuration);
       }
     } else {
-      console.warn(`Upload endpoint returned status ${xhr.status}. Falling back to serverless registration...`);
+      console.warn(`Upload endpoint returned status ${xhr.status}. Falling back to registration...`);
       fallbackRegister(file, exactDuration);
     }
   };
 
   xhr.onerror = () => {
-    console.warn('Binary upload connection error. Falling back to serverless registration...');
+    console.warn('Binary upload connection error. Falling back to registration...');
     fallbackRegister(file, exactDuration);
   };
 
@@ -359,6 +391,7 @@ function sendUpload(file, exactDuration) {
 }
 
 function handleSuccessfulUploadResponse(res) {
+  uploadedVideo = res.video;
   console.log('Video resource registered successfully:', res);
   uploadStatusText.textContent = 'Upload complete';
   progressBar.style.width = '100%';
@@ -382,13 +415,13 @@ function handleSuccessfulUploadResponse(res) {
     videoDetailsCard.classList.remove('hidden');
   }, 500);
 
-  // Enable Stream Start
+  // Enable Stream Start and persist state
   startStreamBtn.disabled = false;
   lblActiveVideo.textContent = res.video.name;
 }
 
 function fallbackRegister(file, exactDuration) {
-  fetch('/api/register-video', {
+  fetch(apiUrl('/api/register-video'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -416,7 +449,9 @@ function resetUploadZone() {
   uploadLabel.classList.remove('hidden');
   progressBarContainer.classList.add('hidden');
   videoDetailsCard.classList.add('hidden');
-  startStreamBtn.disabled = true;
+  if (!uploadedVideo) {
+    startStreamBtn.disabled = true;
+  }
 }
 
 // ============================================================
@@ -428,7 +463,7 @@ startStreamBtn.addEventListener('click', () => {
   if (socket && socket.emit) {
     try { socket.emit('toggle_stream', { action: 'START' }); } catch (e) {}
   }
-  fetch('/api/stream/start', { method: 'POST' })
+  fetch(apiUrl('/api/stream/start'), { method: 'POST' })
     .then(r => r.json())
     .then(data => {
       startStreamBtn.disabled = false;
@@ -448,7 +483,7 @@ stopStreamBtn.addEventListener('click', () => {
   if (socket && socket.emit) {
     try { socket.emit('toggle_stream', { action: 'STOP' }); } catch (e) {}
   }
-  fetch('/api/stream/stop', { method: 'POST' })
+  fetch(apiUrl('/api/stream/stop'), { method: 'POST' })
     .then(r => r.json())
     .then(data => {
       stopStreamBtn.disabled = false;
@@ -471,13 +506,16 @@ function updateStreamControlUI(stream) {
     startStreamBtn.classList.add('hidden');
     stopStreamBtn.classList.remove('hidden');
     
-    lblActiveVideo.textContent = stream.filename;
-    lblStartTime.textContent = new Date(stream.started_at).toLocaleTimeString();
+    const activeName = stream.filename || (uploadedVideo && uploadedVideo.name) || 'Live Broadcast';
+    lblActiveVideo.textContent = activeName;
+    lblStartTime.textContent = stream.started_at ? new Date(stream.started_at).toLocaleTimeString() : new Date().toLocaleTimeString();
     
     uploadZone.style.pointerEvents = 'none';
     uploadZone.style.opacity = '0.55';
     
-    startStreamElapsedTimer(stream.started_at);
+    if (stream.started_at) {
+      startStreamElapsedTimer(stream.started_at);
+    }
   } else {
     globalStatus.textContent = '● OFFLINE';
     globalStatus.className = 'status-indicator offline';
@@ -494,17 +532,15 @@ function updateStreamControlUI(stream) {
     
     stopStreamElapsedTimer();
     
-    fetch('/api/stream-info')
-      .then(r => r.json())
-      .then(d => {
-        if (!d.status || !d.status.video_id) {
-          startStreamBtn.disabled = true;
-          lblActiveVideo.textContent = 'None';
-        } else {
-          startStreamBtn.disabled = false;
-          lblActiveVideo.textContent = d.status.filename;
-        }
-      });
+    // Check if there is an uploaded video in memory OR reported by backend stream status
+    const availableName = (uploadedVideo && uploadedVideo.name) || (stream && stream.filename) || (stream && stream.filepath);
+    if (availableName) {
+      startStreamBtn.disabled = false;
+      lblActiveVideo.textContent = availableName;
+    } else {
+      startStreamBtn.disabled = true;
+      lblActiveVideo.textContent = 'None';
+    }
   }
 }
 

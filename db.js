@@ -205,14 +205,25 @@ export async function stopLiveStream() {
 }
 
 export async function getStreamStatus() {
+  let res = null;
   if (db) {
     try {
-      const res = await db.get(`
+      res = await db.get(`
         SELECT s.status, s.started_at, s.video_id, v.filename, v.filepath, v.size, v.duration 
         FROM stream_status s
         LEFT JOIN videos v ON s.video_id = v.id
         WHERE s.id = 1
       `);
+      if (res && !res.filename) {
+        const latest = await db.get('SELECT * FROM videos ORDER BY id DESC LIMIT 1');
+        if (latest) {
+          res.latest_video_id = latest.id;
+          res.filename = latest.filename;
+          res.filepath = latest.filepath;
+          res.size = latest.size;
+          res.duration = latest.duration;
+        }
+      }
       if (res) return res;
     } catch (e) {}
   }
@@ -222,10 +233,11 @@ export async function getStreamStatus() {
     status: s.status || 'OFFLINE',
     started_at: s.started_at,
     video_id: s.video_id,
-    filename: v ? v.filename : (memStore.videos[0]?.filename || 'sample_live_video.mp4'),
-    filepath: v ? v.filepath : (memStore.videos[0]?.filepath || 'sample_live_video.mp4'),
-    size: v ? v.size : (memStore.videos[0]?.size || 788493),
-    duration: v ? v.duration : (memStore.videos[0]?.duration || 30)
+    latest_video_id: v ? v.id : null,
+    filename: v ? v.filename : (memStore.videos[0]?.filename || null),
+    filepath: v ? v.filepath : (memStore.videos[0]?.filepath || null),
+    size: v ? v.size : (memStore.videos[0]?.size || null),
+    duration: v ? v.duration : (memStore.videos[0]?.duration || null)
   };
 }
 

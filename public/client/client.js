@@ -33,16 +33,39 @@ document.querySelectorAll('.theme-toggle-btn').forEach(btn => {
 });
 
 // ============================================================
-// CLIENT IDENTIFICATION & SOCKET INITIALIZATION
+// BACKEND URL RESOLUTION & SOCKET.IO INITIALIZATION
 // ============================================================
+function getBackendUrl() {
+  if (typeof window !== 'undefined') {
+    if (window.ALIVE_BACKEND_URL) return window.ALIVE_BACKEND_URL;
+    const stored = localStorage.getItem('alive_backend_url');
+    if (stored) return stored;
+    return window.location.origin;
+  }
+  return '';
+}
+
+function apiUrl(path) {
+  const base = getBackendUrl();
+  return base ? `${base.replace(/\/$/, '')}${path}` : path;
+}
+
 let clientId = localStorage.getItem('alive_client_id');
 if (!clientId) {
   clientId = `CLIENT-${Math.floor(1000 + Math.random() * 9000)}`;
   localStorage.setItem('alive_client_id', clientId);
 }
 
+const BACKEND_URL = getBackendUrl();
 const socket = typeof io !== 'undefined'
-  ? io(window.location.origin, { transports: ['websocket', 'polling'] })
+  ? io(BACKEND_URL, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000
+    })
   : { on: () => {}, emit: () => {} };
 
 // DOM Elements
@@ -116,8 +139,16 @@ function updateTimelineDisplay() {
 // SOCKET LISTENERS
 // ============================================================
 socket.on('connect', () => {
-  console.log('Connected to VTS server, registering client...');
+  console.log('[SOCKET] Client connected to backend:', BACKEND_URL, 'Socket ID:', socket.id);
   socket.emit('client_register', { clientId });
+});
+
+socket.on('connect_error', (err) => {
+  console.warn('[SOCKET] Client socket notice:', err.message, 'Target:', BACKEND_URL);
+});
+
+socket.on('disconnect', (reason) => {
+  console.log('[SOCKET] Client disconnected:', reason);
 });
 
 socket.on('client_registered', (data) => {
@@ -126,7 +157,7 @@ socket.on('client_registered', (data) => {
   console.log(`Registered as ${clientId}`);
   
   // Request initial stream status
-  fetch('/api/stream-info')
+  fetch(apiUrl('/api/stream-info'))
     .then(r => r.json())
     .then(info => {
       updateStreamStatusUI(info.status);
@@ -137,9 +168,9 @@ socket.on('stream_status_change', (data) => {
   updateStreamStatusUI(data);
 });
 
-// Periodic HTTP REST Polling Fallback (For serverless environments without persistent WebSockets)
+// Periodic HTTP REST Polling
 function pollClientStreamStatus() {
-  fetch('/api/stream-info')
+  fetch(apiUrl('/api/stream-info'))
     .then(r => r.json())
     .then(info => {
       if (info && info.status) {
@@ -192,7 +223,7 @@ function handleSourceAllocation(data) {
   serverStreamStartTime = data.streamStartedAt;
   streamStartTime = Date.now();
   
-  streamPlayer.src = `/video/${encodeURIComponent(data.videoName)}`;
+  streamPlayer.src = apiUrl(`/video/${encodeURIComponent(data.videoName)}`);
   streamPlayer.load();
   streamPlayer.classList.remove('hidden');
   videoPlaceholder.classList.add('hidden');
@@ -281,7 +312,7 @@ watchBtn.addEventListener('click', () => {
   if (socket && socket.emit) {
     try { socket.emit('watch_live'); } catch (e) {}
   }
-  fetch('/api/stream/watch', {
+  fetch(apiUrl('/api/stream/watch'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ clientId })
@@ -307,7 +338,7 @@ disconnectBtn.addEventListener('click', () => {
   if (socket && socket.emit) {
     try { socket.emit('disconnect_stream'); } catch (e) {}
   }
-  fetch('/api/stream/disconnect', {
+  fetch(apiUrl('/api/stream/disconnect'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ clientId })
