@@ -137,6 +137,20 @@ socket.on('stream_status_change', (data) => {
   updateStreamStatusUI(data);
 });
 
+// Periodic HTTP REST Polling Fallback (For serverless environments without persistent WebSockets)
+function pollClientStreamStatus() {
+  fetch('/api/stream-info')
+    .then(r => r.json())
+    .then(info => {
+      if (info && info.status) {
+        updateStreamStatusUI(info.status);
+      }
+    })
+    .catch(() => {});
+}
+setInterval(pollClientStreamStatus, 4000);
+pollClientStreamStatus();
+
 socket.on('stream_terminated', () => {
   console.log('Stream terminated by admin.');
   resetPlayerUI();

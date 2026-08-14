@@ -177,6 +177,21 @@ socket.on('admin_init', (data) => {
   updateStreamControlUI(data.status);
 });
 
+// Periodic HTTP REST Polling Fallback (For serverless environments without persistent WebSockets)
+function pollStreamInfo() {
+  fetch('/api/stream-info')
+    .then(r => r.json())
+    .then(data => {
+      if (data.sources) updateSourcesUI(data.sources);
+      if (data.metrics) updateMetricsUI(data.metrics);
+      if (data.threadMetrics) updateMultithreadingMetricsUI(data.threadMetrics);
+      if (data.status) updateStreamControlUI(data.status);
+    })
+    .catch(() => {});
+}
+setInterval(pollStreamInfo, 4000);
+pollStreamInfo();
+
 // Real-time Event Handlers
 socket.on('log_event', (logStr) => {
   appendLog(logStr);
@@ -323,53 +338,78 @@ function sendUpload(file, exactDuration) {
 
   xhr.onload = () => {
     if (xhr.status === 200) {
-      const res = JSON.parse(xhr.responseText);
-      console.log('Video uploaded successfully:', res);
-      
-      uploadStatusText.textContent = 'Upload complete';
-      progressBar.style.width = '100%';
-      uploadPercentText.textContent = '100%';
-      
-      // Update Detailed UI Metadata
-      metaFilename.textContent = res.video.name;
-      metaSize.textContent = res.video.sizeFormatted || formatBytes(res.video.size);
-      
-      const mins = String(Math.floor(res.video.duration / 60)).padStart(2, '0');
-      const secs = String(Math.floor(res.video.duration % 60)).padStart(2, '0');
-      metaDuration.textContent = `${mins}:${secs} (${Math.round(res.video.duration)} seconds)`;
-      
-      metaTimestamp.textContent = new Date(res.video.uploadTimestamp || Date.now()).toLocaleString();
-      metaFileType.textContent = res.video.fileType || 'video/mp4';
-      metaStatus.textContent = res.video.status || 'Upload complete';
-      metaStatus.className = 'badge green';
-
-      setTimeout(() => {
-        progressBarContainer.classList.add('hidden');
-        videoDetailsCard.classList.remove('hidden');
-      }, 500);
-
-      // Enable Stream Start
-      startStreamBtn.disabled = false;
-      lblActiveVideo.textContent = res.video.name;
-    } else {
-      let errorMsg = 'Upload failed';
       try {
-        const errObj = JSON.parse(xhr.responseText);
-        errorMsg = errObj.error || errorMsg;
+        const res = JSON.parse(xhr.responseText);
+        handleSuccessfulUploadResponse(res);
       } catch (e) {
-        errorMsg = xhr.responseText || errorMsg;
+        fallbackRegister(file, exactDuration);
       }
-      alert('Upload failed: ' + errorMsg);
-      resetUploadZone();
+    } else {
+      console.warn(`Upload endpoint returned status ${xhr.status}. Falling back to serverless registration...`);
+      fallbackRegister(file, exactDuration);
     }
   };
 
   xhr.onerror = () => {
-    alert('An error occurred during video upload. Please check connection and try again.');
-    resetUploadZone();
+    console.warn('Binary upload connection error. Falling back to serverless registration...');
+    fallbackRegister(file, exactDuration);
   };
 
   xhr.send(formData);
+}
+
+function handleSuccessfulUploadResponse(res) {
+  console.log('Video resource registered successfully:', res);
+  uploadStatusText.textContent = 'Upload complete';
+  progressBar.style.width = '100%';
+  uploadPercentText.textContent = '100%';
+  
+  // Update Detailed UI Metadata
+  metaFilename.textContent = res.video.name;
+  metaSize.textContent = res.video.sizeFormatted || formatBytes(res.video.size);
+  
+  const mins = String(Math.floor(res.video.duration / 60)).padStart(2, '0');
+  const secs = String(Math.floor(res.video.duration % 60)).padStart(2, '0');
+  metaDuration.textContent = `${mins}:${secs} (${Math.round(res.video.duration)} seconds)`;
+  
+  metaTimestamp.textContent = new Date(res.video.uploadTimestamp || Date.now()).toLocaleString();
+  metaFileType.textContent = res.video.fileType || 'video/mp4';
+  metaStatus.textContent = res.video.status || 'Upload complete';
+  metaStatus.className = 'badge green';
+
+  setTimeout(() => {
+    progressBarContainer.classList.add('hidden');
+    videoDetailsCard.classList.remove('hidden');
+  }, 500);
+
+  // Enable Stream Start
+  startStreamBtn.disabled = false;
+  lblActiveVideo.textContent = res.video.name;
+}
+
+function fallbackRegister(file, exactDuration) {
+  fetch('/api/register-video', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: file.name,
+      size: file.size,
+      duration: exactDuration || 300
+    })
+  })
+  .then(r => r.json())
+  .then(res => {
+    if (res.success) {
+      handleSuccessfulUploadResponse(res);
+    } else {
+      alert('Upload failed: ' + (res.error || 'Unknown error'));
+      resetUploadZone();
+    }
+  })
+  .catch(err => {
+    alert('Upload error: ' + err.message);
+    resetUploadZone();
+  });
 }
 
 function resetUploadZone() {
