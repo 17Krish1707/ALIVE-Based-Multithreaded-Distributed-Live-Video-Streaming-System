@@ -325,21 +325,52 @@ function selectBestSource() {
 // API ENDPOINTS
 // ============================================================
 
+// Helper for safe file moving across devices and temp paths
+async function safeMoveFile(videoFile, destinationPath) {
+  if (videoFile.tempFilePath && fs.existsSync(videoFile.tempFilePath)) {
+    try {
+      fs.copyFileSync(videoFile.tempFilePath, destinationPath);
+      try { fs.unlinkSync(videoFile.tempFilePath); } catch (e) {}
+      return;
+    } catch (e) {
+      // Fall back to mv
+    }
+  }
+
+  return new Promise((resolve, reject) => {
+    videoFile.mv(destinationPath, (err) => {
+      if (err) {
+        try {
+          if (videoFile.data) {
+            fs.writeFileSync(destinationPath, videoFile.data);
+            return resolve();
+          }
+        } catch (e) {}
+        return reject(err);
+      }
+      resolve();
+    });
+  });
+}
+
 // Upload Video (Up to 1 GB)
 app.post('/api/upload', async (req, res) => {
   try {
     if (!req.files || Object.keys(req.files).length === 0) {
-      return res.status(400).json({ error: 'No video file was uploaded.' });
+      return res.status(400).json({ error: 'No video file was uploaded. Please select an MP4 file.' });
     }
 
-    const videoFile = req.files.video;
+    const videoFile = req.files.video || Object.values(req.files)[0];
+    if (!videoFile) {
+      return res.status(400).json({ error: 'No valid video file payload found in request.' });
+    }
     
     // Validate MP4 format
-    if (!videoFile.name.toLowerCase().endsWith('.mp4')) {
+    if (!videoFile.name || !videoFile.name.toLowerCase().endsWith('.mp4')) {
       return res.status(400).json({ error: 'Only MP4 video files (.mp4) are allowed.' });
     }
 
-    // Validate size within 1 GB
+    // Validate size within 1 GB limit
     if (videoFile.size > MAX_UPLOAD_SIZE) {
       return res.status(413).json({ error: 'File exceeds the maximum upload limit of 1 GB.' });
     }
@@ -348,8 +379,8 @@ app.post('/api/upload', async (req, res) => {
     const filename = `${Date.now()}-${safeName}`;
     const filepath = path.join(UPLOADS_DIR, filename);
 
-    // Move file from temp upload location to uploads directory
-    await videoFile.mv(filepath);
+    // Move file safely
+    await safeMoveFile(videoFile, filepath);
 
     let duration = req.body?.duration ? parseFloat(req.body.duration) : 0;
     if (!duration || isNaN(duration)) {
@@ -368,6 +399,7 @@ app.post('/api/upload', async (req, res) => {
         id: videoId,
         name: videoFile.name,
         filename,
+        filepath: filename,
         size: videoFile.size,
         sizeFormatted,
         duration,
@@ -378,7 +410,7 @@ app.post('/api/upload', async (req, res) => {
     });
   } catch (err) {
     console.error('[MAIN THREAD] Upload error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message || 'Internal video processing error' });
   }
 });
 

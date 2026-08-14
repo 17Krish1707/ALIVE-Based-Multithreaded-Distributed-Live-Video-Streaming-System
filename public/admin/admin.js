@@ -260,21 +260,35 @@ function handleUpload(file) {
     return;
   }
 
-  // Read exact duration from video metadata in browser
+  let handled = false;
+  const triggerSend = (dur) => {
+    if (handled) return;
+    handled = true;
+    sendUpload(file, dur);
+  };
+
+  // Read exact duration from video metadata in browser with fallback timer
   const tempVideo = document.createElement('video');
   tempVideo.preload = 'metadata';
   const objectUrl = URL.createObjectURL(file);
   tempVideo.src = objectUrl;
 
+  const timeoutTimer = setTimeout(() => {
+    URL.revokeObjectURL(objectUrl);
+    triggerSend(0);
+  }, 2000);
+
   tempVideo.onloadedmetadata = () => {
+    clearTimeout(timeoutTimer);
     URL.revokeObjectURL(objectUrl);
     const exactDuration = Math.round(tempVideo.duration) || 0;
-    sendUpload(file, exactDuration);
+    triggerSend(exactDuration);
   };
 
   tempVideo.onerror = () => {
+    clearTimeout(timeoutTimer);
     URL.revokeObjectURL(objectUrl);
-    sendUpload(file, 0);
+    triggerSend(0);
   };
 }
 
