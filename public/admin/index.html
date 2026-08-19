@@ -18,6 +18,7 @@
       <nav>
         <ul>
           <li class="active"><a href="#monitoring">System Status</a></li>
+          <li><a href="#clock-sync">Clock Sync Lab</a></li>
           <li><a href="#deadlock-demo">Deadlock Lab</a></li>
           <li><a href="/client" target="_blank">Launch Client (Tab)</a></li>
           <li><a href="/" target="_blank">System Home</a></li>
@@ -222,11 +223,12 @@
                     <th>Start Time</th>
                     <th>Duration</th>
                     <th>Status</th>
+                    <th>Action</th>
                   </tr>
                 </thead>
                 <tbody id="client-table-body">
                   <tr>
-                    <td colspan="8" class="text-center font-italic text-muted">No active streaming sessions.</td>
+                    <td colspan="9" class="text-center font-italic text-muted">No active streaming sessions.</td>
                   </tr>
                 </tbody>
               </table>
@@ -265,6 +267,487 @@
               <ul id="allocation-history-list" class="history-list">
                 <li class="empty-msg text-muted font-italic">No historical allocations recorded.</li>
               </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section: Clock Synchronization Laboratory -->
+      <section id="clock-sync" class="tab-content">
+        <header class="content-header">
+          <div>
+            <h1>Distributed Clock Synchronization Laboratory</h1>
+            <p class="subtitle">Physical Clock Synchronization (Cristian & Berkeley) • Logical Event Ordering (Lamport) • Real-Time Math & Formulas</p>
+          </div>
+          <div class="header-actions">
+            <button id="theme-toggle-clock" class="theme-toggle-btn" title="Toggle Light / Dark Mode">
+              <span class="theme-icon">☀️</span>
+              <span class="theme-text">Light Mode</span>
+            </button>
+            <div class="stream-control-badge">
+              <span id="clock-active-algo-badge" class="badge purple">CRISTIAN'S ALGORITHM</span>
+            </div>
+          </div>
+        </header>
+
+        <!-- Top Controls: Algorithm Selector and Action Buttons -->
+        <div class="card clock-control-card">
+          <div class="clock-control-header">
+            <!-- Algorithm Selector Tabs -->
+            <div class="algo-tabs">
+              <button class="algo-tab-btn active" data-algo="cristian" id="tab-algo-cristian">
+                <strong>Cristian's Algorithm</strong>
+                <span>Time Server + RTT / 2</span>
+              </button>
+              <button class="algo-tab-btn" data-algo="berkeley" id="tab-algo-berkeley">
+                <strong>Berkeley Algorithm</strong>
+                <span>Coordinator + Average</span>
+              </button>
+              <button class="algo-tab-btn" data-algo="lamport" id="tab-algo-lamport">
+                <strong>Lamport Logical Clocks</strong>
+                <span>Distributed Event Ordering</span>
+              </button>
+            </div>
+
+            <!-- Experiment Control Action Buttons -->
+            <div class="clock-actions-cluster">
+              <button id="clock-btn-run" class="btn btn-success">Run Algorithm</button>
+              <button id="clock-btn-step" class="btn btn-primary">Step-by-Step</button>
+              <button id="clock-btn-reset-clocks" class="btn btn-grey">Reset Clocks</button>
+              <button id="clock-btn-reset-all" class="btn btn-danger">Reset Experiment</button>
+            </div>
+          </div>
+
+          <!-- Speed Slider & Step Progress Status -->
+          <div class="clock-speed-bar">
+            <div class="speed-slider-group">
+              <label for="clock-speed-slider">Simulation Delay: <strong id="clock-speed-label">300 ms</strong></label>
+              <input type="range" id="clock-speed-slider" min="50" max="1200" value="300" step="50">
+              <div class="speed-ticks">
+                <span>Fast (50ms)</span>
+                <span>Normal (300ms)</span>
+                <span>Slow (1.2s)</span>
+              </div>
+            </div>
+            <div class="step-status-box">
+              <span class="lbl">Step Progress:</span>
+              <span id="clock-step-status-pill" class="badge blue">Ready to Execute</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Node Clocks Live Table HUD (Continuous real-time ticking simulation) -->
+        <div class="card">
+          <div class="card-title flex-between">
+            <h3>Distributed Node Clocks (Continuous Live Simulation)</h3>
+            <span class="badge blue" id="clock-sync-overall-status">5 Nodes Monitored</span>
+          </div>
+          <div class="table-container">
+            <table class="clock-nodes-table">
+              <thead>
+                <tr>
+                  <th>Node</th>
+                  <th>Role</th>
+                  <th>Node Type</th>
+                  <th>Current Simulated Time</th>
+                  <th>Clock Offset (Skew)</th>
+                  <th>Sync Status</th>
+                  <th>Last Correction</th>
+                </tr>
+              </thead>
+              <tbody id="clock-nodes-table-body">
+                <!-- Populated dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Algorithm Execution Workspace (Dynamic for Cristian, Berkeley, Lamport) -->
+        <div class="clock-algorithm-workspaces">
+          <!-- 1. CRISTIAN WORKSPACE -->
+          <div id="workspace-cristian" class="algo-workspace active">
+            <div class="section-grid-2">
+              <!-- Left: Calculation & Formula Card -->
+              <div class="card">
+                <div class="card-title flex-between">
+                  <h3>Cristian's Synchronization Breakdown</h3>
+                  <div class="select-group">
+                    <label for="cristian-target-node">Target Node:</label>
+                    <select id="cristian-target-node" class="custom-select">
+                      <option value="Peer-1">Peer-1 (+5000 ms)</option>
+                      <option value="Peer-2">Peer-2 (-2000 ms)</option>
+                      <option value="Edge-1">Edge-1 (+3000 ms)</option>
+                      <option value="CDN-1">CDN-1 (+7000 ms)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="math-breakdown-panel">
+                  <div class="math-grid-4">
+                    <div class="math-card">
+                      <span class="lbl">Time Server</span>
+                      <strong class="val text-primary" id="c-math-server">VTS (Offset 0ms)</strong>
+                    </div>
+                    <div class="math-card">
+                      <span class="lbl">Request Sent (T0)</span>
+                      <strong class="val" id="c-math-t0">-</strong>
+                    </div>
+                    <div class="math-card">
+                      <span class="lbl">Server Time (Tserver)</span>
+                      <strong class="val text-success" id="c-math-tserver">-</strong>
+                    </div>
+                    <div class="math-card">
+                      <span class="lbl">Response Received (T1)</span>
+                      <strong class="val" id="c-math-t1">-</strong>
+                    </div>
+                  </div>
+
+                  <div class="formula-box">
+                    <div class="formula-line">
+                      <span class="formula-name">1. Round Trip Time (RTT):</span>
+                      <code>RTT = T1 - T0 = <span id="c-math-rtt">-</span> ms</code>
+                    </div>
+                    <div class="formula-line">
+                      <span class="formula-name">2. Estimated One-Way Network Delay:</span>
+                      <code>Delay ≈ RTT / 2 = <span id="c-math-delay">-</span> ms</code>
+                    </div>
+                    <div class="formula-line">
+                      <span class="formula-name">3. Estimated Correct Time:</span>
+                      <code>CorrectedTime = Tserver + (RTT / 2) = <span id="c-math-correct-time">-</span></code>
+                    </div>
+                    <div class="formula-line highlight">
+                      <span class="formula-name">4. Required Clock Correction:</span>
+                      <code>Δ = CorrectedTime - T1 = <span id="c-math-correction">-</span></code>
+                    </div>
+                  </div>
+
+                  <div class="workspace-actions">
+                    <button id="cristian-apply-btn" class="btn btn-success">Synchronize Selected Node</button>
+                    <button id="cristian-sync-all-btn" class="btn btn-primary">Synchronize All Nodes</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Right: Cristian Protocol Flow Diagram -->
+              <div class="card">
+                <div class="card-title">
+                  <h3>Cristian Protocol Message Sequence</h3>
+                </div>
+                <div class="protocol-sequence-diagram">
+                  <div class="seq-timeline">
+                    <div class="seq-entity">
+                      <strong>Client Node</strong>
+                      <span id="seq-client-label">Peer-1</span>
+                    </div>
+                    <div class="seq-space"></div>
+                    <div class="seq-entity server">
+                      <strong>Time Server</strong>
+                      <span>VTS</span>
+                    </div>
+                  </div>
+
+                  <div class="seq-events-flow" id="cristian-seq-flow">
+                    <div class="seq-arrow-right">
+                      <span class="seq-msg">1. TIME_REQUEST (T0) &rarr;</span>
+                    </div>
+                    <div class="seq-processing">
+                      <span>VTS reads server clock: Tserver</span>
+                    </div>
+                    <div class="seq-arrow-left">
+                      <span class="seq-msg">&larr; 2. TIME_RESPONSE (Tserver)</span>
+                    </div>
+                    <div class="seq-processing">
+                      <span>Peer-1 records T1, computes RTT/2, and adjusts clock</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. BERKELEY WORKSPACE -->
+          <div id="workspace-berkeley" class="algo-workspace">
+            <div class="section-grid-2">
+              <!-- Left: Berkeley Coordinator Math & Averages -->
+              <div class="card">
+                <div class="card-title flex-between">
+                  <h3>Berkeley Master Consensus Breakdown</h3>
+                  <span class="badge purple">Coordinator: VTS</span>
+                </div>
+
+                <div class="berkeley-breakdown">
+                  <div class="berkeley-clocks-summary">
+                    <h4>1. Polled Node Clocks</h4>
+                    <div class="table-container compact">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Node</th>
+                            <th>Polled Time</th>
+                            <th>Offset</th>
+                          </tr>
+                        </thead>
+                        <tbody id="berkeley-polled-tbody">
+                          <tr><td colspan="3" class="text-muted font-italic">Run algorithm to poll distributed nodes.</td></tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div class="berkeley-average-card">
+                    <span class="lbl">2. Calculated Arithmetic Average</span>
+                    <h3 id="berkeley-average-val">-</h3>
+                    <p class="formula-desc">Average = (T_vts + T_peer1 + T_peer2 + T_edge1 + T_cdn1) / 5</p>
+                  </div>
+
+                  <div class="berkeley-adjustments-card">
+                    <h4>3. Per-Node Adjustments (Distributed to Nodes)</h4>
+                    <div class="adjustments-grid" id="berkeley-adjustments-grid">
+                      <!-- Populated dynamically -->
+                    </div>
+                  </div>
+
+                  <div class="workspace-actions">
+                    <button id="berkeley-apply-btn" class="btn btn-success">Distribute Adjustments to All Nodes</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Right: Berkeley Visual Flow Diagram -->
+              <div class="card">
+                <div class="card-title">
+                  <h3>Berkeley Coordinator Flow</h3>
+                </div>
+                <div class="berkeley-flow-diagram">
+                  <div class="bf-step">
+                    <div class="bf-circle">1</div>
+                    <div class="bf-text">
+                      <strong>Coordinator Polls Nodes</strong>
+                      <p>VTS broadcasts TIME_POLL_REQUEST to Peer-1, Peer-2, Edge-1, CDN-1.</p>
+                    </div>
+                  </div>
+                  <div class="bf-step">
+                    <div class="bf-circle">2</div>
+                    <div class="bf-text">
+                      <strong>Nodes Reply with Clocks</strong>
+                      <p>Nodes return their local simulated physical time readings to VTS.</p>
+                    </div>
+                  </div>
+                  <div class="bf-step">
+                    <div class="bf-circle">3</div>
+                    <div class="bf-text">
+                      <strong>Coordinator Computes Average</strong>
+                      <p>VTS computes the consensus mean time across all collected readings.</p>
+                    </div>
+                  </div>
+                  <div class="bf-step">
+                    <div class="bf-circle">4</div>
+                    <div class="bf-text">
+                      <strong>Coordinator Dispatches Deltas</strong>
+                      <p>VTS sends individual relative adjustments (Δ = Average - T_node) to each node.</p>
+                    </div>
+                  </div>
+                  <div class="bf-step highlight">
+                    <div class="bf-circle">5</div>
+                    <div class="bf-text">
+                      <strong>Nodes Apply Adjustments</strong>
+                      <p>All nodes adjust their physical clocks simultaneously, achieving consensus.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 3. LAMPORT WORKSPACE -->
+          <div id="workspace-lamport" class="algo-workspace">
+            <!-- Top: Logical Clocks HUD Grid -->
+            <div class="card">
+              <div class="card-title flex-between">
+                <h3>Lamport Logical Clocks (Counters)</h3>
+                <span class="badge blue">Logical Event Ordering • Physical Clocks Unchanged</span>
+              </div>
+              <div class="lamport-counters-grid">
+                <div class="lamport-node-card">
+                  <span class="ln-name">VTS (Tracker)</span>
+                  <div class="ln-counter" id="l-counter-vts">L = 0</div>
+                </div>
+                <div class="lamport-node-card">
+                  <span class="ln-name">Peer-1</span>
+                  <div class="ln-counter" id="l-counter-peer1">L = 0</div>
+                </div>
+                <div class="lamport-node-card">
+                  <span class="ln-name">Peer-2</span>
+                  <div class="ln-counter" id="l-counter-peer2">L = 0</div>
+                </div>
+                <div class="lamport-node-card">
+                  <span class="ln-name">Edge-1</span>
+                  <div class="ln-counter" id="l-counter-edge1">L = 0</div>
+                </div>
+                <div class="lamport-node-card">
+                  <span class="ln-name">CDN-1</span>
+                  <div class="ln-counter" id="l-counter-cdn1">L = 0</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="section-grid-2">
+              <!-- Left: Interactive Event Trigger Panel -->
+              <div class="card">
+                <div class="card-title">
+                  <h3>Trigger Distributed Lamport Events</h3>
+                </div>
+                <div class="lamport-triggers-box">
+                  <div class="trigger-group">
+                    <h4>1. Local Internal Event (Rule 1: L = L + 1)</h4>
+                    <div class="form-row">
+                      <select id="lamport-local-node" class="custom-select">
+                        <option value="Peer-1">Peer-1</option>
+                        <option value="Peer-2">Peer-2</option>
+                        <option value="Edge-1">Edge-1</option>
+                        <option value="CDN-1">CDN-1</option>
+                        <option value="VTS">VTS Server</option>
+                      </select>
+                      <select id="lamport-local-type" class="custom-select">
+                        <option value="BUFFER_VIDEO_CHUNK">BUFFER_VIDEO_CHUNK</option>
+                        <option value="DECODE_FRAME">DECODE_FRAME</option>
+                        <option value="CACHE_REFRESH">CACHE_REFRESH</option>
+                        <option value="LOCAL_COMPUTE">LOCAL_COMPUTE</option>
+                      </select>
+                      <button id="btn-trigger-local-event" class="btn btn-primary">Tick Local Event</button>
+                    </div>
+                  </div>
+
+                  <div class="trigger-group">
+                    <h4>2. Send Message (Rule 2 & 3: L_recv = max(L_recv, L_msg) + 1)</h4>
+                    <div class="form-row">
+                      <select id="lamport-msg-sender" class="custom-select">
+                        <option value="Peer-1">From: Peer-1</option>
+                        <option value="Peer-2">From: Peer-2</option>
+                        <option value="Edge-1">From: Edge-1</option>
+                        <option value="CDN-1">From: CDN-1</option>
+                        <option value="VTS">From: VTS</option>
+                      </select>
+                      <span class="arrow-indicator">&rarr;</span>
+                      <select id="lamport-msg-receiver" class="custom-select">
+                        <option value="VTS">To: VTS</option>
+                        <option value="Peer-1">To: Peer-1</option>
+                        <option value="Peer-2">To: Peer-2</option>
+                        <option value="Edge-1">To: Edge-1</option>
+                        <option value="CDN-1">To: CDN-1</option>
+                      </select>
+                      <select id="lamport-msg-type" class="custom-select">
+                        <option value="STREAMING_CHUNK">STREAMING_CHUNK</option>
+                        <option value="CAPACITY_UPDATE">CAPACITY_UPDATE</option>
+                        <option value="ALLOCATION_REQUEST">ALLOCATION_REQUEST</option>
+                        <option value="HEARTBEAT">HEARTBEAT</option>
+                      </select>
+                      <button id="btn-trigger-msg-event" class="btn btn-success">Send Message</button>
+                    </div>
+                  </div>
+
+                  <div class="lamport-rule-callout">
+                    <strong>Lamport Ordering Invariant:</strong> If event $a$ happens before $b$ in the same process, then $L(a) < L(b)$. If $a$ is the sending of a message and $b$ is its receipt, then $L(a) < L(b)$.
+                  </div>
+                </div>
+              </div>
+
+              <!-- Right: Event Timeline Table -->
+              <div class="card">
+                <div class="card-title flex-between">
+                  <h3>Distributed Event Timeline</h3>
+                  <span class="badge grey" id="lamport-timeline-count">0 Events</span>
+                </div>
+                <div class="table-container timeline-table-container">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Node</th>
+                        <th>Event Type</th>
+                        <th>Category</th>
+                        <th>Lamport Clock (L)</th>
+                        <th>Timestamp</th>
+                      </tr>
+                    </thead>
+                    <tbody id="lamport-timeline-tbody">
+                      <tr><td colspan="6" class="text-muted font-italic text-center">No distributed events recorded yet.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Clock Algorithm Comparison Cards (Viva Reference) -->
+        <div class="card">
+          <div class="card-title">
+            <h3>Distributed Clock Algorithm Comparison</h3>
+          </div>
+          <div class="algo-comparison-grid">
+            <div class="comparison-card">
+              <div class="cc-header">
+                <h4>Cristian's Algorithm</h4>
+                <span class="badge blue">Physical Clock</span>
+              </div>
+              <ul class="cc-details">
+                <li><strong>Type:</strong> Physical Clock Synchronization</li>
+                <li><strong>Coordinator:</strong> Authoritative Time Server (VTS)</li>
+                <li><strong>Key Principle:</strong> Client requests time, measures RTT, estimates one-way propagation delay as <code>RTT / 2</code>, and applies correction <code>T_server + RTT/2 - T_client</code>.</li>
+                <li><strong>Limitation:</strong> Vulnerable to single point of failure (server) and asymmetric network route delays.</li>
+              </ul>
+            </div>
+
+            <div class="comparison-card">
+              <div class="cc-header">
+                <h4>Berkeley Algorithm</h4>
+                <span class="badge green">Physical Clock</span>
+              </div>
+              <ul class="cc-details">
+                <li><strong>Type:</strong> Physical Clock Synchronization</li>
+                <li><strong>Coordinator:</strong> Internal Coordinator (VTS)</li>
+                <li><strong>Key Principle:</strong> Coordinator periodically polls all distributed nodes, collects their local clock times, computes the collective average, and distributes individual delta adjustments.</li>
+                <li><strong>Advantage:</strong> No external UTC server needed; achieves consensus among participating nodes.</li>
+              </ul>
+            </div>
+
+            <div class="comparison-card">
+              <div class="cc-header">
+                <h4>Lamport Logical Clock</h4>
+                <span class="badge purple">Logical Clock</span>
+              </div>
+              <ul class="cc-details">
+                <li><strong>Type:</strong> Logical Counter (Causality Ordering)</li>
+                <li><strong>Coordinator:</strong> None (Decentralized)</li>
+                <li><strong>Key Principle:</strong> Orders distributed events without physical time. Local event increments <code>L = L + 1</code>. Message receipt updates <code>L_recv = max(L_recv, L_msg) + 1</code>.</li>
+                <li><strong>Distinction:</strong> Never changes operating system or simulated physical clocks.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <!-- Middle Section Grid: Topology Canvas & Real-Time Console Logs -->
+        <div class="section-grid-2">
+          <!-- Clock Topology Diagram Canvas -->
+          <div class="card canvas-card">
+            <div class="card-title flex-between">
+              <h3>Live Clock Synchronization Topology</h3>
+              <span class="badge grey" id="clock-packet-counter">Packets: Active</span>
+            </div>
+            <div class="canvas-wrapper">
+              <canvas id="clock-topology-canvas" width="550" height="350"></canvas>
+            </div>
+          </div>
+
+          <!-- Real-Time Experiment Log Console -->
+          <div class="card console-card">
+            <div class="card-title flex-between">
+              <h3>Clock Experiment Log Console</h3>
+              <button id="btn-clear-clock-logs" class="btn btn-grey" style="padding: 3px 8px; font-size: 0.75rem;">Clear Logs</button>
+            </div>
+            <div class="console-box" id="clock-console-logs">
+              <!-- Logs dynamically appended -->
             </div>
           </div>
         </div>
@@ -366,6 +849,23 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- Safety Confirmation Modal for Admin Client Disconnect -->
+  <div id="disconnect-modal" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-icon text-danger">⚠️</div>
+        <h3 id="disconnect-modal-title">Disconnect Client Session?</h3>
+      </div>
+      <p class="modal-body" id="disconnect-modal-body">
+        This will terminate the active streaming session, terminate the dedicated Worker Thread, release source capacity, and update the session status to ADMIN_DISCONNECTED.
+      </p>
+      <div class="modal-actions">
+        <button id="modal-cancel-btn" class="btn btn-grey">Cancel</button>
+        <button id="modal-confirm-btn" class="btn btn-danger">Disconnect Client</button>
+      </div>
+    </div>
   </div>
 
   <!-- Backend URL Config — edit /backend-config.js to point to your persistent backend -->

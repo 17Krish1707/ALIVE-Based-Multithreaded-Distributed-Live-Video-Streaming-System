@@ -37,6 +37,9 @@ document.querySelectorAll('.theme-toggle-btn').forEach(btn => {
 // ============================================================
 function getBackendUrl() {
   if (typeof window !== 'undefined') {
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      return window.location.origin;
+    }
     if (window.ALIVE_BACKEND_URL) return window.ALIVE_BACKEND_URL;
     const stored = localStorage.getItem('alive_backend_url');
     if (stored) return stored;
@@ -50,10 +53,10 @@ function apiUrl(path) {
   return base ? `${base.replace(/\/$/, '')}${path}` : path;
 }
 
-let clientId = localStorage.getItem('alive_client_id');
+let clientId = sessionStorage.getItem('alive_client_id');
 if (!clientId) {
   clientId = `CLIENT-${Math.floor(1000 + Math.random() * 9000)}`;
-  localStorage.setItem('alive_client_id', clientId);
+  sessionStorage.setItem('alive_client_id', clientId);
 }
 
 const BACKEND_URL = getBackendUrl();
@@ -298,6 +301,27 @@ socket.on('source_changed', (data) => {
     failoverBanner.classList.add('hidden');
   }, 5000);
 });
+
+// Real-Time Admin-Controlled Disconnect Listener
+socket.on('admin_client_disconnected', (data) => {
+  console.warn('[ADMIN DISCONNECT]', data);
+  resetPlayerUI();
+
+  const modal = document.getElementById('admin-disconnect-modal');
+  if (modal) {
+    modal.classList.remove('hidden');
+  }
+});
+
+const modalReconnectBtn = document.getElementById('modal-reconnect-btn');
+if (modalReconnectBtn) {
+  modalReconnectBtn.addEventListener('click', () => {
+    const modal = document.getElementById('admin-disconnect-modal');
+    if (modal) modal.classList.add('hidden');
+    // Re-register or reload to acquire clean session
+    window.location.reload();
+  });
+}
 
 // Stream error handler
 socket.on('stream_error', (data) => {

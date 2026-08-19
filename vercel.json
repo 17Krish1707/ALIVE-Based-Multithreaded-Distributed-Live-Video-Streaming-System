@@ -1,8 +1,9 @@
 {
   "outputDirectory": "public",
   "rewrites": [
+    { "source": "/admin/clock", "destination": "/admin/index.html" },
     { "source": "/admin", "destination": "/admin/index.html" },
     { "source": "/client", "destination": "/client/index.html" },
-    { "source": "/", "destination": "/admin/index.html" }
+    { "source": "/", "destination": "/index.html" }
   ]
 }

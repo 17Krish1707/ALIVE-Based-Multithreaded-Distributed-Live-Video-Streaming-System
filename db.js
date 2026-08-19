@@ -76,9 +76,29 @@ export async function initDB() {
         allocation_time TEXT,
         stream_start_time TEXT,
         disconnect_time TEXT,
+        disconnect_reason TEXT,
         status TEXT,
         current_source TEXT,
         processing_time_ms INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS clock_experiments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        algorithm TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT,
+        status TEXT,
+        details TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS clock_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        experiment_id INTEGER,
+        node_id TEXT,
+        event_type TEXT,
+        timestamp TEXT,
+        logical_time INTEGER,
+        details TEXT
       );
 
       CREATE TABLE IF NOT EXISTS source_allocations (
@@ -101,6 +121,13 @@ export async function initDB() {
       );
     `);
 
+    // Ensure disconnect_reason column exists in existing client_sessions tables
+    try {
+      await db.exec("ALTER TABLE client_sessions ADD COLUMN disconnect_reason TEXT");
+    } catch (e) {
+      // Column may already exist
+    }
+
     // Initialize stream status if not exists
     const statusRow = await db.get('SELECT * FROM stream_status LIMIT 1');
     if (!statusRow) {
@@ -108,7 +135,7 @@ export async function initDB() {
     }
 
     // Clear previous active client sessions on restart to ensure clean logs
-    await db.run("UPDATE client_sessions SET status = 'DISCONNECTED', disconnect_time = ? WHERE status NOT IN ('DISCONNECTED', 'COMPLETED', 'FAILED')", [new Date().toISOString()]);
+    await db.run("UPDATE client_sessions SET status = 'DISCONNECTED', disconnect_time = ? WHERE status NOT IN ('DISCONNECTED', 'COMPLETED', 'FAILED', 'ADMIN_DISCONNECTED')", [new Date().toISOString()]);
 
     return db;
   } catch (err) {
@@ -259,7 +286,7 @@ export async function createClientSession(clientId, ip, browser, os) {
   if (db) {
     try {
       await db.run(
-        'INSERT OR REPLACE INTO client_sessions (client_id, ip_address, browser, os, status) VALUES (?, ?, ?, ?, ?)',
+        'INSERT OR REPLACE INTO client_sessions (client_id, ip_address, browser, os, status, disconnect_reason) VALUES (?, ?, ?, ?, ?, NULL)',
         [clientId, ip, browser, os, 'CONNECTED']
       );
       return;
@@ -275,6 +302,7 @@ export async function createClientSession(clientId, ip, browser, os) {
     allocation_time: null,
     stream_start_time: null,
     disconnect_time: null,
+    disconnect_reason: null,
     current_source: null,
     processing_time_ms: 0
   });
@@ -289,6 +317,7 @@ export async function updateClientSession(clientId, status, updates = {}) {
       if (updates.allocation_time) { fields.push('allocation_time = ?'); params.push(updates.allocation_time); }
       if (updates.stream_start_time) { fields.push('stream_start_time = ?'); params.push(updates.stream_start_time); }
       if (updates.disconnect_time) { fields.push('disconnect_time = ?'); params.push(updates.disconnect_time); }
+      if (updates.disconnect_reason) { fields.push('disconnect_reason = ?'); params.push(updates.disconnect_reason); }
       if (updates.current_source) { fields.push('current_source = ?'); params.push(updates.current_source); }
       if (updates.processing_time_ms !== undefined) { fields.push('processing_time_ms = ?'); params.push(updates.processing_time_ms); }
       params.push(clientId);

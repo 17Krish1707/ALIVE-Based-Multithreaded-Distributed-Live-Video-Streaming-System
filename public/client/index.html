@@ -158,6 +158,26 @@
     </footer>
   </div>
 
+  <!-- Modal: Admin Disconnect Notice -->
+  <div id="admin-disconnect-modal" class="client-modal-backdrop hidden">
+    <div class="client-modal-card">
+      <div class="client-modal-header">
+        <div class="modal-icon text-danger">⚠️</div>
+        <h3>STREAM DISCONNECTED</h3>
+      </div>
+      <div class="client-modal-body">
+        <p>Your streaming session was terminated by the administrator.</p>
+        <div class="reason-box">
+          <span>Reason:</span>
+          <strong class="badge red">ADMIN_DISCONNECT</strong>
+        </div>
+      </div>
+      <div class="client-modal-actions">
+        <button id="modal-reconnect-btn" class="btn btn-primary">Reconnect to Stream</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Backend URL Config — edit /backend-config.js to point to your persistent backend -->
   <script src="/backend-config.js"></script>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>

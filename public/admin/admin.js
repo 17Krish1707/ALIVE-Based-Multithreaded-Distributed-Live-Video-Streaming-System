@@ -33,32 +33,70 @@ document.querySelectorAll('.theme-toggle-btn').forEach(btn => {
 });
 
 // ============================================================
-// TAB SWITCHING LOGIC
+// TAB SWITCHING & DEEP ROUTE LOGIC
 // ============================================================
 const navLinks = document.querySelectorAll('.sidebar nav ul li');
 const tabContents = document.querySelectorAll('.tab-content');
+
+function activateAdminTab(tabId, updateUrl = true) {
+  navLinks.forEach(l => {
+    const href = l.querySelector('a')?.getAttribute('href');
+    if (href === `#${tabId}`) {
+      l.classList.add('active');
+    } else {
+      l.classList.remove('active');
+    }
+  });
+
+  tabContents.forEach(t => {
+    if (t.id === tabId) {
+      t.classList.add('active');
+    } else {
+      t.classList.remove('active');
+    }
+  });
+
+  if (updateUrl) {
+    if (tabId === 'clock-sync') {
+      window.history.replaceState(null, '', '/admin/clock' + window.location.search);
+    } else {
+      window.history.replaceState(null, '', '/admin#' + tabId);
+    }
+  }
+}
 
 navLinks.forEach((link) => {
   link.addEventListener('click', (e) => {
     const href = link.querySelector('a')?.getAttribute('href');
     if (href && href.startsWith('#')) {
       e.preventDefault();
-      navLinks.forEach(l => l.classList.remove('active'));
-      tabContents.forEach(t => t.classList.remove('active'));
-      
-      link.classList.add('active');
       const tabId = href.substring(1);
-      const targetTab = document.getElementById(tabId);
-      if (targetTab) targetTab.classList.add('active');
+      activateAdminTab(tabId, true);
     }
   });
 });
+
+function initRouteOnLoad() {
+  const path = window.location.pathname;
+  const hash = window.location.hash;
+  if (path === '/admin/clock' || path === '/admin/clock/' || hash === '#clock-sync') {
+    activateAdminTab('clock-sync', false);
+  } else if (hash === '#deadlock-demo') {
+    activateAdminTab('deadlock-demo', false);
+  } else {
+    activateAdminTab('monitoring', false);
+  }
+}
+initRouteOnLoad();
 
 // ============================================================
 // BACKEND URL RESOLUTION & SOCKET.IO INITIALIZATION
 // ============================================================
 function getBackendUrl() {
   if (typeof window !== 'undefined') {
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      return window.location.origin;
+    }
     if (window.ALIVE_BACKEND_URL) return window.ALIVE_BACKEND_URL;
     const stored = localStorage.getItem('alive_backend_url');
     if (stored) return stored;
@@ -207,6 +245,11 @@ socket.on('admin_init', (data) => {
   
   // Stream state
   updateStreamControlUI(data.status);
+
+  // Clock state
+  if (data.clock) {
+    updateClockState(data.clock);
+  }
 });
 
 // Periodic HTTP REST Polling
@@ -227,6 +270,14 @@ pollStreamInfo();
 // Real-time Event Handlers
 socket.on('log_event', (logStr) => {
   appendLog(logStr);
+});
+
+socket.on('clock_log', (logStr) => {
+  appendClockLog(logStr);
+});
+
+socket.on('clock_state', (state) => {
+  updateClockState(state);
 });
 
 socket.on('metrics_update', (metrics) => {
@@ -668,7 +719,7 @@ function updateClientTableUI(sessions) {
   const activeSessions = sessions.filter(s => ['CONNECTED', 'REQUESTING', 'ALLOCATED', 'STREAMING'].includes(s.status));
   
   if (activeSessions.length === 0) {
-    clientTableBody.innerHTML = '<tr><td colspan="8" class="text-center font-italic text-muted">No active streaming sessions.</td></tr>';
+    clientTableBody.innerHTML = '<tr><td colspan="9" class="text-center font-italic text-muted">No active streaming sessions.</td></tr>';
     return;
   }
 
@@ -684,7 +735,7 @@ function updateClientTableUI(sessions) {
     }
 
     const source = session.current_source || '-';
-    const lat = session.current_source ? sourcesState.find(s => s.id === session.current_source)?.latency + ' ms' : '-';
+    const lat = session.current_source ? (sourcesState.find(s => s.id === session.current_source)?.latency + ' ms') : '-';
     const start = session.stream_start_time ? new Date(session.stream_start_time).toTimeString().split(' ')[0] : '-';
     const req = session.request_time ? new Date(session.request_time).toTimeString().split(' ')[0] : '-';
     
@@ -692,6 +743,11 @@ function updateClientTableUI(sessions) {
     if (session.status === 'STREAMING') statusClass = 'badge green';
     else if (session.status === 'REQUESTING') statusClass = 'badge yellow';
     else if (session.status === 'FAILED') statusClass = 'badge red';
+
+    const isStreaming = session.status === 'STREAMING' || session.status === 'REQUESTING';
+    const actionHtml = isStreaming 
+      ? `<button class="btn btn-danger" style="padding: 4px 10px; font-size: 0.75rem; font-weight:600;" onclick="promptDisconnectClient('${session.client_id}')">Disconnect</button>`
+      : `<span class="text-muted" style="font-size:0.75rem;">-</span>`;
 
     tr.innerHTML = `
       <td class="font-semibold">${session.client_id}</td>
@@ -702,8 +758,47 @@ function updateClientTableUI(sessions) {
       <td>${start}</td>
       <td>${durationText}</td>
       <td><span class="${statusClass}">${session.status}</span></td>
+      <td>${actionHtml}</td>
     `;
     clientTableBody.appendChild(tr);
+  });
+}
+
+// Disconnect Modal Elements & Logic
+let pendingDisconnectClientId = null;
+const disconnectModal = document.getElementById('disconnect-modal');
+const modalConfirmBtn = document.getElementById('modal-confirm-btn');
+const modalCancelBtn = document.getElementById('modal-cancel-btn');
+const modalTitle = document.getElementById('disconnect-modal-title');
+const modalBody = document.getElementById('disconnect-modal-body');
+
+window.promptDisconnectClient = function(clientId) {
+  pendingDisconnectClientId = clientId;
+  if (modalTitle) modalTitle.textContent = `Disconnect ${clientId}?`;
+  if (modalBody) modalBody.textContent = `This will terminate the active streaming session for ${clientId}, kill the dedicated Worker Thread, release source capacity, and record the session as ADMIN_DISCONNECTED.`;
+  if (disconnectModal) disconnectModal.classList.remove('hidden');
+};
+
+if (modalCancelBtn) {
+  modalCancelBtn.addEventListener('click', () => {
+    pendingDisconnectClientId = null;
+    if (disconnectModal) disconnectModal.classList.add('hidden');
+  });
+}
+
+if (modalConfirmBtn) {
+  modalConfirmBtn.addEventListener('click', () => {
+    if (pendingDisconnectClientId) {
+      const cid = pendingDisconnectClientId;
+      pendingDisconnectClientId = null;
+      if (disconnectModal) disconnectModal.classList.add('hidden');
+
+      // Dispatch real server-side disconnect via Socket & REST
+      socket.emit('admin_disconnect_client', { clientId: cid });
+      fetch(apiUrl(`/api/admin/clients/${encodeURIComponent(cid)}/disconnect`), {
+        method: 'POST'
+      }).catch(() => {});
+    }
   });
 }
 
@@ -1034,3 +1129,678 @@ function resetDeadlockVisuals() {
   dlResEdge1Lock.textContent = 'FREE';
   dlResEdge1Lock.className = 'badge green';
 }
+
+// ============================================================
+// CLOCK SYNCHRONIZATION EXPERIMENT ENGINE FRONTEND
+// ============================================================
+
+let clockState = {
+  nodes: [
+    { id: 'VTS', name: 'VTS (Tracker)', type: 'Master Server', offsetMs: 0, status: 'MASTER', role: 'TIME_SERVER / COORDINATOR', lastCorrectionMs: 0 },
+    { id: 'Peer-1', name: 'Peer-1', type: 'P2P Peer', offsetMs: 5000, status: 'UNSYNCED', role: 'CLIENT_NODE', lastCorrectionMs: 0 },
+    { id: 'Peer-2', name: 'Peer-2', type: 'P2P Peer', offsetMs: -2000, status: 'UNSYNCED', role: 'CLIENT_NODE', lastCorrectionMs: 0 },
+    { id: 'Edge-1', name: 'Edge-1', type: 'Edge Server', offsetMs: 3000, status: 'UNSYNCED', role: 'CLIENT_NODE', lastCorrectionMs: 0 },
+    { id: 'CDN-1', name: 'CDN-1', type: 'CDN Node', offsetMs: 7000, status: 'UNSYNCED', role: 'CLIENT_NODE', lastCorrectionMs: 0 }
+  ],
+  lamportClocks: { 'VTS': 0, 'Peer-1': 0, 'Peer-2': 0, 'Edge-1': 0, 'CDN-1': 0 },
+  lamportEvents: [],
+  activeAlgorithm: 'cristian',
+  stepState: { currentStep: 0, totalSteps: 5, completed: false, algorithm: 'cristian' }
+};
+
+let clockAnimationPackets = [];
+let simDelayMs = 300;
+
+// Clock DOM Elements
+const clockNodesTableBody = document.getElementById('clock-nodes-table-body');
+const clockActiveAlgoBadge = document.getElementById('clock-active-algo-badge');
+const clockStepStatusPill = document.getElementById('clock-step-status-pill');
+const clockSpeedSlider = document.getElementById('clock-speed-slider');
+const clockSpeedLabel = document.getElementById('clock-speed-label');
+const clockConsoleLogs = document.getElementById('clock-console-logs');
+const btnClearClockLogs = document.getElementById('btn-clear-clock-logs');
+
+// Controls
+const clockBtnRun = document.getElementById('clock-btn-run');
+const clockBtnStep = document.getElementById('clock-btn-step');
+const clockBtnResetClocks = document.getElementById('clock-btn-reset-clocks');
+const clockBtnResetAll = document.getElementById('clock-btn-reset-all');
+
+// Algorithm tabs
+const algoTabBtns = document.querySelectorAll('.algo-tab-btn');
+const algoWorkspaces = document.querySelectorAll('.algo-workspace');
+
+// Cristian elements
+const cristianTargetNode = document.getElementById('cristian-target-node');
+const cMathServer = document.getElementById('c-math-server');
+const cMathT0 = document.getElementById('c-math-t0');
+const cMathTserver = document.getElementById('c-math-tserver');
+const cMathT1 = document.getElementById('c-math-t1');
+const cMathRtt = document.getElementById('c-math-rtt');
+const cMathDelay = document.getElementById('c-math-delay');
+const cMathCorrectTime = document.getElementById('c-math-correct-time');
+const cMathCorrection = document.getElementById('c-math-correction');
+const cristianApplyBtn = document.getElementById('cristian-apply-btn');
+const cristianSyncAllBtn = document.getElementById('cristian-sync-all-btn');
+const seqClientLabel = document.getElementById('seq-client-label');
+
+// Berkeley elements
+const berkeleyPolledTbody = document.getElementById('berkeley-polled-tbody');
+const berkeleyAverageVal = document.getElementById('berkeley-average-val');
+const berkeleyAdjustmentsGrid = document.getElementById('berkeley-adjustments-grid');
+const berkeleyApplyBtn = document.getElementById('berkeley-apply-btn');
+
+// Lamport elements
+const lCounterVts = document.getElementById('l-counter-vts');
+const lCounterPeer1 = document.getElementById('l-counter-peer1');
+const lCounterPeer2 = document.getElementById('l-counter-peer2');
+const lCounterEdge1 = document.getElementById('l-counter-edge1');
+const lCounterCdn1 = document.getElementById('l-counter-cdn1');
+const lamportLocalNode = document.getElementById('lamport-local-node');
+const lamportLocalType = document.getElementById('lamport-local-type');
+const btnTriggerLocalEvent = document.getElementById('btn-trigger-local-event');
+const lamportMsgSender = document.getElementById('lamport-msg-sender');
+const lamportMsgReceiver = document.getElementById('lamport-msg-receiver');
+const lamportMsgType = document.getElementById('lamport-msg-type');
+const btnTriggerMsgEvent = document.getElementById('btn-trigger-msg-event');
+const lamportTimelineTbody = document.getElementById('lamport-timeline-tbody');
+const lamportTimelineCount = document.getElementById('lamport-timeline-count');
+
+// Helper to format simulated time with milliseconds
+function formatClockTime(ms) {
+  const d = new Date(ms);
+  const hrs = String(d.getHours()).padStart(2, '0');
+  const mins = String(d.getMinutes()).padStart(2, '0');
+  const secs = String(d.getSeconds()).padStart(2, '0');
+  const millis = String(d.getMilliseconds()).padStart(3, '0');
+  return `${hrs}:${mins}:${secs}.${millis}`;
+}
+
+// Continuously tick the displayed times in the Node Clocks table HUD
+function tickClockNodesHUD() {
+  if (!clockNodesTableBody) return;
+
+  const now = Date.now();
+  const rows = clockNodesTableBody.querySelectorAll('tr');
+
+  clockState.nodes.forEach((node, idx) => {
+    const timeVal = now + node.offsetMs;
+    const formatted = formatClockTime(timeVal);
+    const timeCell = document.getElementById(`clock-time-${node.id}`);
+    if (timeCell) {
+      timeCell.textContent = formatted;
+    }
+  });
+}
+setInterval(tickClockNodesHUD, 50);
+
+// Render or update the Node Clocks Live Table rows
+function renderClockNodesTable() {
+  if (!clockNodesTableBody) return;
+  clockNodesTableBody.innerHTML = '';
+
+  const now = Date.now();
+  clockState.nodes.forEach(node => {
+    const tr = document.createElement('tr');
+    
+    let offsetClass = 'offset-synced';
+    let offsetSign = '+';
+    if (node.offsetMs > 0) {
+      offsetClass = 'offset-fast';
+      offsetSign = '+';
+    } else if (node.offsetMs < 0) {
+      offsetClass = 'offset-slow';
+      offsetSign = '';
+    }
+
+    let statusBadge = 'badge grey';
+    if (node.status === 'MASTER') statusBadge = 'badge purple';
+    else if (node.status === 'SYNCHRONIZED') statusBadge = 'badge green';
+    else if (node.status === 'UNSYNCED') statusBadge = 'badge yellow';
+
+    let lastCorrectionText = node.lastCorrectionMs 
+      ? `${(node.lastCorrectionMs / 1000).toFixed(3)}s` 
+      : '-';
+
+    tr.innerHTML = `
+      <td><span class="node-id-badge">${node.id}</span></td>
+      <td><span class="badge ${node.id === 'VTS' ? 'purple' : 'grey'}">${node.role || (node.id === 'VTS' ? 'COORDINATOR' : 'NODE')}</span></td>
+      <td>${node.type || 'Distributed Node'}</td>
+      <td><span class="time-display" id="clock-time-${node.id}">${formatClockTime(now + node.offsetMs)}</span></td>
+      <td><strong class="offset-display ${offsetClass}">${offsetSign}${node.offsetMs} ms</strong></td>
+      <td><span class="${statusBadge}" id="clock-status-${node.id}">${node.status}</span></td>
+      <td><span class="text-secondary">${lastCorrectionText}</span></td>
+    `;
+    clockNodesTableBody.appendChild(tr);
+  });
+}
+
+// Initial algorithm resolution from URL param or sessionStorage
+function getInitialAlgorithm() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const fromUrl = urlParams.get('algorithm');
+  if (fromUrl && ['cristian', 'berkeley', 'lamport'].includes(fromUrl.toLowerCase())) {
+    return fromUrl.toLowerCase();
+  }
+  const fromSession = sessionStorage.getItem('alive_active_clock_algo');
+  if (fromSession && ['cristian', 'berkeley', 'lamport'].includes(fromSession)) {
+    return fromSession;
+  }
+  return 'cristian';
+}
+
+let localActiveAlgorithm = getInitialAlgorithm();
+
+// Update clock state from backend payload (NEVER forces activeAlgorithm switch)
+function updateClockState(newState) {
+  if (!newState) return;
+  clockState = newState;
+
+  renderClockNodesTable();
+
+  // Update Cristian calculations if present
+  if (newState.lastCristianResult) {
+    updateCristianMathUI(newState.lastCristianResult);
+  }
+
+  // Update Berkeley calculations if present
+  if (newState.lastBerkeleyResult) {
+    updateBerkeleyMathUI(newState.lastBerkeleyResult);
+  }
+
+  // Update Lamport logical clocks & timeline
+  if (newState.lamportClocks) {
+    updateLamportCounters(newState.lamportClocks);
+  }
+
+  if (newState.lamportEvents) {
+    updateLamportTimelineUI(newState.lamportEvents);
+  }
+
+  // Update Step status
+  if (newState.stepState) {
+    updateStepProgressUI(newState.stepState);
+  }
+
+  // Populate logs if available
+  if (newState.logs && clockConsoleLogs && clockConsoleLogs.childElementCount === 0) {
+    newState.logs.forEach(log => appendClockLog(log));
+  }
+}
+
+// Tab Switching between Cristian, Berkeley, and Lamport (User controlled only)
+function selectAlgoTab(algoKey, updateHistory = true) {
+  localActiveAlgorithm = algoKey;
+  sessionStorage.setItem('alive_active_clock_algo', algoKey);
+  clockState.activeAlgorithm = algoKey;
+
+  algoTabBtns.forEach(btn => {
+    if (btn.getAttribute('data-algo') === algoKey) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+
+  algoWorkspaces.forEach(ws => {
+    if (ws.id === `workspace-${algoKey}`) {
+      ws.classList.add('active');
+    } else {
+      ws.classList.remove('active');
+    }
+  });
+
+  if (clockActiveAlgoBadge) {
+    clockActiveAlgoBadge.textContent = `${algoKey.toUpperCase()}'S ALGORITHM`;
+    if (algoKey === 'cristian') clockActiveAlgoBadge.className = 'badge blue';
+    else if (algoKey === 'berkeley') clockActiveAlgoBadge.className = 'badge purple';
+    else clockActiveAlgoBadge.className = 'badge green';
+  }
+
+  if (seqClientLabel && cristianTargetNode) {
+    seqClientLabel.textContent = cristianTargetNode.value;
+  }
+
+  if (updateHistory && (window.location.pathname.includes('/clock') || window.location.hash === '#clock-sync')) {
+    const url = new URL(window.location);
+    url.searchParams.set('algorithm', algoKey);
+    window.history.replaceState(null, '', url);
+  }
+}
+
+// Initialize active algorithm tab UI
+selectAlgoTab(localActiveAlgorithm, false);
+
+algoTabBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    const algo = btn.getAttribute('data-algo');
+    selectAlgoTab(algo, true);
+  });
+});
+
+if (cristianTargetNode) {
+  cristianTargetNode.addEventListener('change', () => {
+    if (seqClientLabel) seqClientLabel.textContent = cristianTargetNode.value;
+  });
+}
+
+// Speed slider
+if (clockSpeedSlider && clockSpeedLabel) {
+  clockSpeedSlider.addEventListener('input', (e) => {
+    simDelayMs = parseInt(e.target.value, 10);
+    clockSpeedLabel.textContent = `${simDelayMs} ms`;
+  });
+}
+
+// ------------------------------------------------------------
+// Action Controls & Buttons
+// ------------------------------------------------------------
+
+// Run Algorithm
+clockBtnRun.addEventListener('click', () => {
+  const algo = localActiveAlgorithm;
+  if (algo === 'cristian') {
+    const target = cristianTargetNode ? cristianTargetNode.value : 'Peer-1';
+    spawnClockPacket('VTS', target, 'TIME_REQ');
+    socket.emit('clock_cristian_run', { targetNodeId: target });
+    fetch(apiUrl('/api/clock/cristian/run'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetNodeId: target })
+    }).then(r => r.json()).then(data => {
+      if (data.result) updateCristianMathUI(data.result);
+      if (data.state) updateClockState(data.state);
+    }).catch(() => {});
+  } else if (algo === 'berkeley') {
+    spawnClockPacket('VTS', 'Peer-1', 'POLL');
+    spawnClockPacket('VTS', 'Peer-2', 'POLL');
+    spawnClockPacket('VTS', 'Edge-1', 'POLL');
+    spawnClockPacket('VTS', 'CDN-1', 'POLL');
+    socket.emit('clock_berkeley_run');
+    fetch(apiUrl('/api/clock/berkeley/run'), {
+      method: 'POST'
+    }).then(r => r.json()).then(data => {
+      if (data.result) updateBerkeleyMathUI(data.result);
+      if (data.state) updateClockState(data.state);
+    }).catch(() => {});
+  } else {
+    // Lamport interactive step
+    socket.emit('clock_step', { algorithm: 'lamport' });
+    fetch(apiUrl('/api/clock/step'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ algorithm: 'lamport' })
+    }).then(r => r.json()).then(data => {
+      if (data.state) updateClockState(data.state);
+    }).catch(() => {});
+  }
+});
+
+// Step-by-Step
+clockBtnStep.addEventListener('click', () => {
+  const algo = localActiveAlgorithm;
+  socket.emit('clock_step', { algorithm: algo });
+  fetch(apiUrl('/api/clock/step'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ algorithm: algo })
+  }).then(r => r.json()).then(data => {
+    if (data.stepState) updateStepProgressUI(data.stepState);
+    if (data.state) updateClockState(data.state);
+  }).catch(() => {});
+});
+
+// Reset Clocks
+clockBtnResetClocks.addEventListener('click', () => {
+  socket.emit('clock_reset');
+  fetch(apiUrl('/api/clock/reset'), { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.state) updateClockState(data.state);
+    }).catch(() => {});
+});
+
+// Reset All
+clockBtnResetAll.addEventListener('click', () => {
+  socket.emit('clock_reset');
+  if (clockConsoleLogs) clockConsoleLogs.innerHTML = '';
+  fetch(apiUrl('/api/clock/reset'), { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.state) updateClockState(data.state);
+    }).catch(() => {});
+});
+
+// Clear Logs
+if (btnClearClockLogs) {
+  btnClearClockLogs.addEventListener('click', () => {
+    if (clockConsoleLogs) clockConsoleLogs.innerHTML = '';
+  });
+}
+
+// Synchronize Selected Cristian Node
+if (cristianApplyBtn) {
+  cristianApplyBtn.addEventListener('click', () => {
+    const target = cristianTargetNode ? cristianTargetNode.value : 'Peer-1';
+    spawnClockPacket('VTS', target, 'TIME_REQ');
+    socket.emit('clock_cristian_run', { targetNodeId: target });
+    fetch(apiUrl('/api/clock/cristian/run'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetNodeId: target })
+    }).then(r => r.json()).then(data => {
+      if (data.result) updateCristianMathUI(data.result);
+      if (data.state) updateClockState(data.state);
+    }).catch(() => {});
+  });
+}
+
+// Synchronize All Cristian Nodes
+if (cristianSyncAllBtn) {
+  cristianSyncAllBtn.addEventListener('click', () => {
+    ['Peer-1', 'Peer-2', 'Edge-1', 'CDN-1'].forEach(nodeId => {
+      spawnClockPacket('VTS', nodeId, 'TIME_REQ');
+    });
+    socket.emit('clock_cristian_run_all');
+    fetch(apiUrl('/api/clock/cristian/run-all'), { method: 'POST' })
+      .then(r => r.json())
+      .then(data => {
+        if (data.state) updateClockState(data.state);
+      }).catch(() => {});
+  });
+}
+
+// Distribute Berkeley Adjustments
+if (berkeleyApplyBtn) {
+  berkeleyApplyBtn.addEventListener('click', () => {
+    ['Peer-1', 'Peer-2', 'Edge-1', 'CDN-1'].forEach(nodeId => {
+      spawnClockPacket('VTS', nodeId, 'ADJUST');
+    });
+    socket.emit('clock_berkeley_run');
+    fetch(apiUrl('/api/clock/berkeley/run'), { method: 'POST' })
+      .then(r => r.json())
+      .then(data => {
+        if (data.result) updateBerkeleyMathUI(data.result);
+        if (data.state) updateClockState(data.state);
+      }).catch(() => {});
+  });
+}
+
+// Lamport Local Event Trigger
+if (btnTriggerLocalEvent) {
+  btnTriggerLocalEvent.addEventListener('click', () => {
+    const node = lamportLocalNode ? lamportLocalNode.value : 'Peer-1';
+    const type = lamportLocalType ? lamportLocalType.value : 'BUFFER_VIDEO_CHUNK';
+    socket.emit('clock_lamport_event', { nodeId: node, eventType: type });
+    fetch(apiUrl('/api/clock/lamport/event'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nodeId: node, eventType: type })
+    }).then(r => r.json()).then(data => {
+      if (data.state) updateClockState(data.state);
+    }).catch(() => {});
+  });
+}
+
+// Lamport Message Event Trigger
+if (btnTriggerMsgEvent) {
+  btnTriggerMsgEvent.addEventListener('click', () => {
+    const sender = lamportMsgSender ? lamportMsgSender.value : 'Peer-1';
+    const receiver = lamportMsgReceiver ? lamportMsgReceiver.value : 'VTS';
+    const type = lamportMsgType ? lamportMsgType.value : 'STREAMING_CHUNK';
+    
+    spawnClockPacket(sender, receiver, `L=${(clockState.lamportClocks[sender] || 0) + 1}`);
+
+    fetch(apiUrl('/api/clock/lamport/message'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ senderNodeId: sender, receiverNodeId: receiver, messageType: type })
+    }).then(r => r.json()).then(data => {
+      if (data.state) updateClockState(data.state);
+    }).catch(() => {});
+  });
+}
+
+// ------------------------------------------------------------
+// Mathematical UI Updaters
+// ------------------------------------------------------------
+
+function updateCristianMathUI(res) {
+  if (!res) return;
+  if (cMathServer) cMathServer.textContent = `${res.timeServer || 'VTS'} (Offset 0ms)`;
+  if (cMathT0) cMathT0.textContent = formatClockTime(res.t0);
+  if (cMathTserver) cMathTserver.textContent = formatClockTime(res.tServer);
+  if (cMathT1) cMathT1.textContent = formatClockTime(res.t1);
+  if (cMathRtt) cMathRtt.textContent = `${res.rtt} ms`;
+  if (cMathDelay) cMathDelay.textContent = `${res.estimatedOneWayDelay} ms`;
+  if (cMathCorrectTime) cMathCorrectTime.textContent = formatClockTime(res.estimatedCorrectTime);
+  if (cMathCorrection) {
+    const sign = res.correctionMs >= 0 ? '+' : '';
+    cMathCorrection.textContent = `${sign}${res.correctionSec || (res.correctionMs / 1000).toFixed(3)} s (${sign}${res.correctionMs} ms)`;
+  }
+}
+
+function updateBerkeleyMathUI(res) {
+  if (!res) return;
+  if (berkeleyAverageVal) {
+    berkeleyAverageVal.textContent = res.averageFormatted || formatClockTime(res.averageTime);
+  }
+
+  // Polled table
+  if (berkeleyPolledTbody && res.polledClocks) {
+    berkeleyPolledTbody.innerHTML = '';
+    Object.values(res.polledClocks).forEach(item => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><strong>${item.nodeId}</strong></td>
+        <td><code>${item.timeFormatted || formatClockTime(item.time)}</code></td>
+        <td><span class="badge ${item.offsetMs > 0 ? 'yellow' : item.offsetMs < 0 ? 'yellow' : 'green'}">${item.offsetMs >= 0 ? '+' : ''}${item.offsetMs} ms</span></td>
+      `;
+      berkeleyPolledTbody.appendChild(tr);
+    });
+  }
+
+  // Adjustments grid
+  if (berkeleyAdjustmentsGrid && res.adjustments) {
+    berkeleyAdjustmentsGrid.innerHTML = '';
+    Object.values(res.adjustments).forEach(item => {
+      const div = document.createElement('div');
+      div.className = 'adj-item';
+      const sign = item.adjustmentMs >= 0 ? '+' : '';
+      div.innerHTML = `
+        <span class="text-secondary">${item.nodeId}</span>
+        <strong class="${item.adjustmentMs === 0 ? 'text-success' : 'text-primary'}">${sign}${item.adjustmentSec || (item.adjustmentMs/1000).toFixed(3)}s</strong>
+        <span style="font-size:0.7rem; color:var(--text-muted);">${sign}${item.adjustmentMs} ms</span>
+      `;
+      berkeleyAdjustmentsGrid.appendChild(div);
+    });
+  }
+}
+
+function updateLamportCounters(counters) {
+  if (!counters) return;
+  if (lCounterVts) lCounterVts.textContent = `L = ${counters['VTS'] || 0}`;
+  if (lCounterPeer1) lCounterPeer1.textContent = `L = ${counters['Peer-1'] || 0}`;
+  if (lCounterPeer2) lCounterPeer2.textContent = `L = ${counters['Peer-2'] || 0}`;
+  if (lCounterEdge1) lCounterEdge1.textContent = `L = ${counters['Edge-1'] || 0}`;
+  if (lCounterCdn1) lCounterCdn1.textContent = `L = ${counters['CDN-1'] || 0}`;
+}
+
+function updateLamportTimelineUI(events) {
+  if (!lamportTimelineTbody) return;
+  if (!events || events.length === 0) {
+    lamportTimelineTbody.innerHTML = '<tr><td colspan="6" class="text-muted font-italic text-center">No distributed events recorded yet.</td></tr>';
+    if (lamportTimelineCount) lamportTimelineCount.textContent = '0 Events';
+    return;
+  }
+
+  if (lamportTimelineCount) lamportTimelineCount.textContent = `${events.length} Events`;
+  lamportTimelineTbody.innerHTML = '';
+
+  events.slice(0, 25).forEach(ev => {
+    const tr = document.createElement('tr');
+    let catBadge = 'badge blue';
+    if (ev.category === 'MESSAGE_SEND') catBadge = 'badge yellow';
+    else if (ev.category === 'MESSAGE_RECEIVE') catBadge = 'badge green';
+    else if (ev.category === 'LOCAL_EVENT') catBadge = 'badge purple';
+
+    const ts = ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : '-';
+
+    tr.innerHTML = `
+      <td>#${ev.id || 1}</td>
+      <td><strong>${ev.nodeId}</strong></td>
+      <td><code>${ev.eventType}</code></td>
+      <td><span class="${catBadge}">${ev.category || 'EVENT'}</span></td>
+      <td><strong class="text-primary" style="font-size:1.1rem; font-family:'Courier New', monospace;">L = ${ev.lamportTime}</strong></td>
+      <td><span class="text-muted">${ts}</span></td>
+    `;
+    lamportTimelineTbody.appendChild(tr);
+  });
+}
+
+function updateStepProgressUI(stepState) {
+  if (!clockStepStatusPill || !stepState) return;
+  if (stepState.currentStep === 0) {
+    clockStepStatusPill.textContent = 'Ready to Execute';
+    clockStepStatusPill.className = 'badge blue';
+  } else if (stepState.completed) {
+    clockStepStatusPill.textContent = `Step ${stepState.currentStep}/${stepState.totalSteps} (COMPLETED)`;
+    clockStepStatusPill.className = 'badge green';
+  } else {
+    clockStepStatusPill.textContent = `Step ${stepState.currentStep}/${stepState.totalSteps} in Progress`;
+    clockStepStatusPill.className = 'badge yellow';
+  }
+}
+
+function appendClockLog(logStr) {
+  if (!clockConsoleLogs) return;
+  const p = document.createElement('p');
+  p.textContent = logStr;
+  if (logStr.includes('[CRISTIAN]')) p.style.color = '#60a5fa';
+  else if (logStr.includes('[BERKELEY]')) p.style.color = '#c084fc';
+  else if (logStr.includes('[LAMPORT]')) p.style.color = '#34d399';
+  
+  clockConsoleLogs.appendChild(p);
+  clockConsoleLogs.scrollTop = clockConsoleLogs.scrollHeight;
+}
+
+// ------------------------------------------------------------
+// Clock Topology Canvas Renderer (Visual Packet Movement)
+// ------------------------------------------------------------
+
+const clockCanvas = document.getElementById('clock-topology-canvas');
+let clockCtx = clockCanvas ? clockCanvas.getContext('2d') : null;
+
+const clockNodesCoords = {
+  'VTS': { x: 275, y: 55, label: 'VTS\n(Server/Coord)', color: '#6366f1', radius: 24 },
+  'Peer-1': { x: 95, y: 220, label: 'Peer-1\n(+5.0s)', color: '#10b981', radius: 20 },
+  'Peer-2': { x: 195, y: 220, label: 'Peer-2\n(-2.0s)', color: '#10b981', radius: 20 },
+  'Edge-1': { x: 355, y: 220, label: 'Edge-1\n(+3.0s)', color: '#06b6d4', radius: 20 },
+  'CDN-1': { x: 455, y: 220, label: 'CDN-1\n(+7.0s)', color: '#a855f7', radius: 20 }
+};
+
+function spawnClockPacket(fromId, toId, label = 'MSG') {
+  if (!clockNodesCoords[fromId] || !clockNodesCoords[toId]) return;
+  clockAnimationPackets.push({
+    from: fromId,
+    to: toId,
+    label,
+    progress: 0,
+    speed: 0.025
+  });
+}
+
+function drawClockTopology() {
+  if (!clockCanvas || !clockCtx) return;
+  clockCtx.clearRect(0, 0, clockCanvas.width, clockCanvas.height);
+
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+
+  // 1. Draw links from VTS to client nodes
+  clockCtx.strokeStyle = isLight ? 'rgba(0, 0, 0, 0.12)' : 'rgba(255, 255, 255, 0.08)';
+  clockCtx.lineWidth = 2;
+
+  const vts = clockNodesCoords['VTS'];
+  ['Peer-1', 'Peer-2', 'Edge-1', 'CDN-1'].forEach(id => {
+    const target = clockNodesCoords[id];
+    clockCtx.beginPath();
+    clockCtx.moveTo(vts.x, vts.y);
+    clockCtx.lineTo(target.x, target.y);
+    clockCtx.stroke();
+  });
+
+  // 2. Draw animated packets
+  clockAnimationPackets.forEach((pkt, idx) => {
+    const src = clockNodesCoords[pkt.from];
+    const dst = clockNodesCoords[pkt.to];
+    if (src && dst) {
+      pkt.progress += pkt.speed;
+      const px = src.x + (dst.x - src.x) * pkt.progress;
+      const py = src.y + (dst.y - src.y) * pkt.progress;
+
+      // Draw packet bubble
+      clockCtx.fillStyle = '#f59e0b';
+      clockCtx.beginPath();
+      clockCtx.arc(px, py, 8, 0, Math.PI * 2);
+      clockCtx.shadowColor = '#f59e0b';
+      clockCtx.shadowBlur = 10;
+      clockCtx.fill();
+      clockCtx.shadowBlur = 0;
+
+      // Draw packet text
+      clockCtx.fillStyle = '#0f172a';
+      clockCtx.font = 'bold 8px Outfit, sans-serif';
+      clockCtx.textAlign = 'center';
+      clockCtx.textBaseline = 'middle';
+      clockCtx.fillText(pkt.label, px, py - 14);
+    }
+  });
+
+  // Clean up completed packets
+  clockAnimationPackets = clockAnimationPackets.filter(p => p.progress < 1);
+
+  // 3. Draw Nodes
+  Object.keys(clockNodesCoords).forEach(key => {
+    const node = clockNodesCoords[key];
+    const nodeData = clockState.nodes.find(n => n.id === key);
+    const offsetStr = nodeData ? (nodeData.offsetMs >= 0 ? `+${(nodeData.offsetMs/1000).toFixed(1)}s` : `${(nodeData.offsetMs/1000).toFixed(1)}s`) : '';
+    const label = `${key}\n(${offsetStr})`;
+
+    clockCtx.fillStyle = isLight ? '#ffffff' : 'rgba(20, 22, 37, 0.95)';
+    clockCtx.strokeStyle = node.color;
+    clockCtx.lineWidth = 3;
+    clockCtx.beginPath();
+    clockCtx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
+    clockCtx.fill();
+    clockCtx.stroke();
+
+    clockCtx.fillStyle = isLight ? '#0f172a' : '#f3f4f6';
+    clockCtx.font = 'bold 9px Outfit, sans-serif';
+    clockCtx.textAlign = 'center';
+    clockCtx.textBaseline = 'middle';
+
+    const lines = label.split('\n');
+    clockCtx.fillText(lines[0], node.x, node.y - 5);
+    clockCtx.font = '8px Outfit, sans-serif';
+    clockCtx.fillStyle = isLight ? '#475569' : '#9ca3af';
+    clockCtx.fillText(lines[1], node.x, node.y + 6);
+  });
+
+  requestAnimationFrame(drawClockTopology);
+}
+
+// Initial draw and load
+renderClockNodesTable();
+if (clockCanvas) {
+  drawClockTopology();
+}
+
+// Fetch initial clock state via REST API on load
+fetch(apiUrl('/api/clock/state'))
+  .then(r => r.json())
+  .then(data => {
+    if (data && data.nodes) {
+      updateClockState(data);
+    }
+  })
+  .catch(() => {});

@@ -28,6 +28,7 @@ import {
   getPerformanceMetrics,
   getVideoRecord
 } from './db.js';
+import ClockManager from './experiments/clock/clockManager.js';
 
 dotenv.config();
 
@@ -113,7 +114,7 @@ app.get(['/client', '/client/'], (req, res) => {
   res.sendFile(path.join(process.cwd(), 'public', 'client', 'index.html'));
 });
 
-app.get(['/admin', '/admin/'], (req, res) => {
+app.get(['/admin', '/admin/', '/admin/clock', '/admin/clock/'], (req, res) => {
   res.sendFile(path.join(process.cwd(), 'public', 'admin', 'index.html'));
 });
 
@@ -246,6 +247,9 @@ function logEvent(message, isMainThread = true) {
   console.log(`${prefix} ${logStr}`);
   io.emit('log_event', logStr);
 }
+
+// Clock Synchronization Engine Instance
+const clockManager = new ClockManager(io, logEvent);
 
 function printActiveWorkersSummary() {
   const total = activeWorkers.size;
@@ -645,6 +649,111 @@ app.get('/api/stream-info', async (req, res) => {
 });
 
 // ============================================================
+// CLOCK SYNCHRONIZATION & ADMIN DISCONNECT REST APIs
+// ============================================================
+
+// Admin Disconnect Client
+app.post('/api/admin/clients/:clientId/disconnect', async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    if (!clientId) {
+      return res.status(400).json({ success: false, error: 'clientId is required' });
+    }
+    const result = await handleAdminClientDisconnect(clientId);
+    res.json(result);
+  } catch (err) {
+    console.error('[REST ADMIN DISCONNECT] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Clock State
+app.get('/api/clock/state', (req, res) => {
+  try {
+    res.json(clockManager.getState());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Clock Reset
+app.post('/api/clock/reset', (req, res) => {
+  try {
+    clockManager.resetAll();
+    res.json({ success: true, state: clockManager.getState() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Cristian Algorithm Execution
+app.post('/api/clock/cristian/run', (req, res) => {
+  try {
+    const { targetNodeId, simulatedNetworkJitter } = req.body || {};
+    const result = clockManager.runCristian(targetNodeId || 'Peer-1', simulatedNetworkJitter !== false);
+    res.json({ success: true, result, state: clockManager.getState() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/clock/cristian/run-all', (req, res) => {
+  try {
+    const results = clockManager.runCristianAll();
+    res.json({ success: true, results, state: clockManager.getState() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Berkeley Algorithm Execution
+app.post('/api/clock/berkeley/run', (req, res) => {
+  try {
+    const result = clockManager.runBerkeley();
+    res.json({ success: true, result, state: clockManager.getState() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Lamport Events
+app.post('/api/clock/lamport/event', (req, res) => {
+  try {
+    const { nodeId, eventType, details } = req.body || {};
+    const result = clockManager.recordLamportLocalEvent(nodeId || 'Peer-1', eventType || 'MANUAL_LOCAL_EVENT', details || {});
+    res.json({ success: true, event: result, state: clockManager.getState() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/clock/lamport/message', (req, res) => {
+  try {
+    const { senderNodeId, receiverNodeId, messageType, payload } = req.body || {};
+    const result = clockManager.recordLamportMessage(
+      senderNodeId || 'Peer-1', 
+      receiverNodeId || 'VTS', 
+      messageType || 'STREAM_TELEMETRY', 
+      payload || {}
+    );
+    res.json({ success: true, result, state: clockManager.getState() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Step-by-Step Controller
+app.post('/api/clock/step', (req, res) => {
+  try {
+    const { algorithm } = req.body || {};
+    const stepState = clockManager.stepNext(algorithm);
+    res.json({ success: true, stepState, state: clockManager.getState() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
 // WEBSOCKET COMMUNICATION & MULTITHREADING
 // ============================================================
 
@@ -669,7 +778,8 @@ io.on('connection', (socket) => {
       switches: switches.slice(0, 15),
       sessions: allSessions.slice(0, 15),
       threads: getActiveThreadsData(),
-      threadMetrics: getMultithreadingMetrics()
+      threadMetrics: getMultithreadingMetrics(),
+      clock: clockManager.getState()
     });
   });
 
@@ -698,6 +808,9 @@ io.on('connection', (socket) => {
     await createClientSession(clientSessionId, ip, browser, os);
     logEvent(`Client connected: ${clientSessionId} (${browser} on ${os}, IP: ${ip})`);
     
+    // Lamport distributed event
+    clockManager.handleStreamingEvent('CLIENT_CONNECTED', { clientId: clientSessionId });
+
     socket.emit('client_registered', { clientId: clientSessionId });
     io.to('admins').emit('client_list_update', await getAllSessions());
     io.to('admins').emit('metrics_update', await getPerformanceMetrics());
@@ -747,6 +860,10 @@ io.on('connection', (socket) => {
 
     logEvent(`Allocating ${source.name} (Type: ${source.type}, Latency: ${source.latency}ms) for ${clientSessionId}. VTS Processing: ${processingTime}ms`);
 
+    // Lamport distributed event
+    clockManager.handleStreamingEvent('WATCH_REQUEST', { clientId: clientSessionId, sourceId: source.id });
+    clockManager.handleStreamingEvent('SOURCE_ALLOCATED', { clientId: clientSessionId, sourceId: source.id });
+
     await updateClientSession(clientSessionId, 'STREAMING', {
       allocation_time: new Date(allocationTime).toISOString(),
       stream_start_time: new Date(allocationTime).toISOString(),
@@ -790,6 +907,9 @@ io.on('connection', (socket) => {
     });
 
     multithreadingMetrics.totalCreated++;
+
+    // Lamport event for worker thread
+    clockManager.handleStreamingEvent('WORKER_CREATED', { clientId: clientSessionId, threadId: worker.threadId, sourceId: source.id });
 
     const workerInfo = {
       worker,
@@ -841,6 +961,9 @@ io.on('connection', (socket) => {
 
         // Structured execution message showing concurrent interleaved activity
         console.log(`[Worker-${msg.threadId}] ${msg.clientId} → Processing chunk ${msg.chunkIndex} (Hash: ${msg.hash}, CPU: ${msg.computeTimeMs}ms, Delivery: ${msg.elapsedTimeMs}ms)`);
+
+        // Lamport event for chunk transmission
+        clockManager.handleStreamingEvent('CHUNK_SENT', { clientId: msg.clientId, chunkIndex: msg.chunkIndex, sourceId: msg.sourceId });
 
         // Send chunk to client socket for real-time telemetry
         const clientSocketId = activeSessionsMap.get(msg.clientId);
@@ -896,10 +1019,12 @@ io.on('connection', (socket) => {
       }
       const startedAt = await startLiveStream(video.id);
       logEvent(`Admin started the LIVE video broadcast.`);
+      clockManager.handleStreamingEvent('START_LIVE', { videoName: video.filepath || video.filename });
       io.emit('stream_status_change', { status: 'LIVE', startedAt, videoName: video.filepath || video.filename, videoDuration: video.duration });
     } else {
       await stopLiveStream();
       logEvent(`Admin stopped the video broadcast.`);
+      clockManager.handleStreamingEvent('STOP_LIVE', {});
       io.emit('stream_status_change', { status: 'OFFLINE' });
       
       // Terminate all active worker threads and disconnect clients
@@ -969,6 +1094,7 @@ io.on('connection', (socket) => {
           newSource.totalRequests++;
           
           logEvent(`Failover reallocation: Client ${cid} moved from ${source.id} -> ${newSource.id} (${newSource.type}, Latency: ${newSource.latency} ms).`);
+          clockManager.handleStreamingEvent('SOURCE_CHANGED', { clientId: cid, oldSourceId: source.id, newSourceId: newSource.id });
           
           // Update worker info with new source
           const workerInfo = activeWorkers.get(cid);
@@ -1025,6 +1151,51 @@ io.on('connection', (socket) => {
   socket.on('disconnect_stream', async () => {
     if (!clientSessionId) return;
     await handleClientDisconnect(clientSessionId);
+  });
+
+  // Admin disconnects a specific streaming client
+  socket.on('admin_disconnect_client', async (data) => {
+    if (data && data.clientId) {
+      await handleAdminClientDisconnect(data.clientId);
+    }
+  });
+
+  // Clock Synchronization Socket Listeners
+  socket.on('clock_get_state', () => {
+    socket.emit('clock_state', clockManager.getState());
+  });
+
+  socket.on('clock_reset', () => {
+    clockManager.resetAll();
+  });
+
+  socket.on('clock_cristian_run', (data) => {
+    clockManager.runCristian(data?.targetNodeId || 'Peer-1', data?.simulatedNetworkJitter !== false);
+  });
+
+  socket.on('clock_cristian_run_all', () => {
+    clockManager.runCristianAll();
+  });
+
+  socket.on('clock_berkeley_run', () => {
+    clockManager.runBerkeley();
+  });
+
+  socket.on('clock_lamport_event', (data) => {
+    clockManager.recordLamportLocalEvent(data?.nodeId || 'Peer-1', data?.eventType || 'MANUAL_EVENT', data?.details || {});
+  });
+
+  socket.on('clock_lamport_message', (data) => {
+    clockManager.recordLamportMessage(
+      data?.senderNodeId || 'Peer-1', 
+      data?.receiverNodeId || 'VTS', 
+      data?.messageType || 'STREAM_TELEMETRY', 
+      data?.payload || {}
+    );
+  });
+
+  socket.on('clock_step', (data) => {
+    clockManager.stepNext(data?.algorithm);
   });
 
   // Handle Socket Disconnect
@@ -1084,8 +1255,11 @@ async function handleClientDisconnect(clientId) {
       await releaseSourceAllocation(clientId, session.current_source, nowStr, durationSecs);
     }
     
-    await updateClientSession(clientId, 'DISCONNECTED', { disconnect_time: nowStr });
+    await updateClientSession(clientId, 'DISCONNECTED', { disconnect_time: nowStr, disconnect_reason: 'CLIENT_DISCONNECT' });
     logEvent(`Client disconnected: ${clientId}. Stream duration: ${durationSecs}s`);
+
+    // Lamport event
+    clockManager.handleStreamingEvent('CLIENT_DISCONNECTED', { clientId, sourceId: session.current_source, reason: 'CLIENT_DISCONNECT' });
 
     io.to('admins').emit('source_update', sources);
     io.to('admins').emit('client_list_update', await getAllSessions());
@@ -1094,6 +1268,94 @@ async function handleClientDisconnect(clientId) {
     io.to('admins').emit('thread_list_update', getActiveThreadsData());
     io.to('admins').emit('thread_metrics_update', getMultithreadingMetrics());
   }
+}
+
+// Real Server-Side Admin-Controlled Client Disconnect
+async function handleAdminClientDisconnect(clientId) {
+  console.log('\n============================================================');
+  console.log(`[ADMIN] Disconnect requested for ${clientId}`);
+
+  // 1. Identify client session and active socket
+  const clientSocketId = activeSessionsMap.get(clientId);
+  if (clientSocketId) {
+    // Notify the client socket immediately
+    io.to(clientSocketId).emit('admin_client_disconnected', {
+      clientId,
+      reason: 'ADMIN_DISCONNECT',
+      message: 'Your streaming session was terminated by the administrator.'
+    });
+    // Disconnect the socket safely after small delay to ensure delivery
+    const sock = io.sockets.sockets.get(clientSocketId);
+    if (sock) {
+      setTimeout(() => {
+        try { sock.disconnect(true); } catch (e) {}
+      }, 500);
+    }
+  }
+
+  // 2. Stop/terminate associated Worker Thread
+  const workerInfo = activeWorkers.get(clientId);
+  let execTime = 0;
+  if (workerInfo && workerInfo.worker) {
+    execTime = Date.now() - workerInfo.startTime;
+    console.log(`[WORKER] Terminating worker threadId=${workerInfo.threadId}`);
+    try { workerInfo.worker.terminate(); } catch (e) {}
+    console.log(`[WORKER] Worker threadId=${workerInfo.threadId} terminated`);
+
+    multithreadingMetrics.completed++;
+    multithreadingMetrics.totalExecutionTimeMs += execTime;
+    if (execTime > multithreadingMetrics.longestExecutionTimeMs) {
+      multithreadingMetrics.longestExecutionTimeMs = execTime;
+    }
+
+    activeWorkers.delete(clientId);
+    printActiveWorkersSummary();
+  }
+
+  // 3. Release VTS/source capacity and update database session
+  const session = await getClientSession(clientId);
+  let sourceId = session ? session.current_source : null;
+  const nowStr = new Date().toISOString();
+  let durationSecs = 0;
+
+  if (session) {
+    if (session.stream_start_time) {
+      durationSecs = Math.round((Date.now() - new Date(session.stream_start_time).getTime()) / 1000);
+    }
+
+    if (sourceId) {
+      const src = sources.find(s => s.id === sourceId);
+      if (src && src.connected > 0) {
+        src.connected = Math.max(0, src.connected - 1);
+        console.log(`[VTS] Released ${src.id} capacity (Connected: ${src.connected}/${src.capacity})`);
+      }
+      await releaseSourceAllocation(clientId, sourceId, nowStr, durationSecs);
+    }
+
+    await updateClientSession(clientId, 'ADMIN_DISCONNECTED', {
+      disconnect_time: nowStr,
+      disconnect_reason: 'ADMIN_DISCONNECT'
+    });
+    console.log(`[SESSION] ${clientId} marked ADMIN_DISCONNECTED in database`);
+  }
+
+  activeSessionsMap.delete(clientId);
+  console.log('============================================================\n');
+
+  logEvent(`Admin intentionally terminated client ${clientId}. Source ${sourceId || 'N/A'} capacity released, worker stopped.`);
+
+  // Lamport event
+  clockManager.handleStreamingEvent('ADMIN_DISCONNECT', { clientId, sourceId });
+
+  // Real-time broadcast to all Admin dashboards
+  io.to('admins').emit('source_update', sources);
+  io.to('admins').emit('client_list_update', await getAllSessions());
+  io.to('admins').emit('history_update', (await getSourceAllocationHistory()).slice(0, 15));
+  io.to('admins').emit('metrics_update', await getPerformanceMetrics());
+  io.to('admins').emit('thread_list_update', getActiveThreadsData());
+  io.to('admins').emit('thread_metrics_update', getMultithreadingMetrics());
+
+  return { success: true, clientId, sourceId, durationSecs };
 }
 
 // ============================================================
