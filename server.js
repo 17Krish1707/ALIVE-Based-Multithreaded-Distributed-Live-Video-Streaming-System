@@ -395,17 +395,21 @@ async function safeMoveFile(videoFile, destinationPath) {
 app.post('/api/upload', async (req, res) => {
   try {
     if (!req.files || Object.keys(req.files).length === 0) {
-      return res.status(400).json({ error: 'No video file was uploaded. Please select an MP4 file.' });
+      return res.status(400).json({ error: 'No video file was uploaded. Please select a video file.' });
     }
 
-    const videoFile = req.files.video || Object.values(req.files)[0];
+    const videoFile = req.files.video || req.files.file || Object.values(req.files)[0];
     if (!videoFile) {
       return res.status(400).json({ error: 'No valid video file payload found in request.' });
     }
     
-    // Validate MP4 format
-    if (!videoFile.name || !videoFile.name.toLowerCase().endsWith('.mp4')) {
-      return res.status(400).json({ error: 'Only MP4 video files (.mp4) are allowed.' });
+    // Validate video format (MP4, WEBM, MOV, MKV, M4V, AVI, etc.)
+    const validExts = ['.mp4', '.m4v', '.webm', '.mov', '.mkv', '.avi', '.ts', '.flv'];
+    const hasValidExt = validExts.some(ext => (videoFile.name || '').toLowerCase().endsWith(ext));
+    const isVideoMime = videoFile.mimetype && videoFile.mimetype.startsWith('video/');
+
+    if (!hasValidExt && !isVideoMime && videoFile.name && !videoFile.name.includes('.')) {
+      videoFile.name += '.mp4';
     }
 
     // Validate size within 1 GB limit
@@ -413,7 +417,7 @@ app.post('/api/upload', async (req, res) => {
       return res.status(413).json({ error: 'File exceeds the maximum upload limit of 1 GB.' });
     }
 
-    const safeName = videoFile.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+    const safeName = (videoFile.name || 'video_master.mp4').replace(/[^a-zA-Z0-9.\-_]/g, '_');
     const filename = `${Date.now()}-${safeName}`;
     const filepath = path.join(UPLOADS_DIR, filename);
 

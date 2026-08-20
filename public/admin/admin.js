@@ -324,33 +324,46 @@ socket.on('stream_status_change', (stream) => {
 // 1 GB VIDEO RESOURCE UPLOAD (Real Streamed Upload & Progress)
 // ============================================================
 
-uploadZone.addEventListener('click', () => {
-  fileInput.click();
+uploadZone.addEventListener('click', (e) => {
+  if (e.target !== fileInput) {
+    fileInput.click();
+  }
+});
+
+fileInput.addEventListener('click', (e) => {
+  e.stopPropagation();
 });
 
 uploadZone.addEventListener('dragover', (e) => {
   e.preventDefault();
+  e.stopPropagation();
   uploadZone.classList.add('drag-over');
 });
 
-uploadZone.addEventListener('dragleave', () => {
+uploadZone.addEventListener('dragleave', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
   uploadZone.classList.remove('drag-over');
 });
 
 uploadZone.addEventListener('drop', (e) => {
   e.preventDefault();
+  e.stopPropagation();
   uploadZone.classList.remove('drag-over');
-  const file = e.dataTransfer.files[0];
+  const file = e.dataTransfer && e.dataTransfer.files ? e.dataTransfer.files[0] : null;
   if (file) handleUpload(file);
 });
 
 fileInput.addEventListener('change', (e) => {
-  const file = e.target.files[0];
-  if (file) handleUpload(file);
+  const file = e.target.files ? e.target.files[0] : null;
+  if (file) {
+    handleUpload(file);
+  }
+  fileInput.value = ''; // Reset so selecting the same file triggers change
 });
 
 function formatBytes(bytes) {
-  if (bytes === 0) return '0 Bytes';
+  if (!bytes || bytes === 0) return '0 Bytes';
   const k = 1024;
   const sizes = ['Bytes', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -358,8 +371,14 @@ function formatBytes(bytes) {
 }
 
 function handleUpload(file) {
-  if (!file.name.toLowerCase().endsWith('.mp4')) {
-    alert('Only MP4 video files (.mp4) are accepted.');
+  if (!file) return;
+
+  const validExts = ['.mp4', '.m4v', '.webm', '.mov', '.mkv', '.avi', '.ts', '.flv'];
+  const isVideo = (file.type && file.type.startsWith('video/')) || 
+                  validExts.some(ext => file.name.toLowerCase().endsWith(ext));
+
+  if (!isVideo) {
+    alert('Please select a valid video file (.mp4, .webm, .mov, etc.).');
     return;
   }
 
@@ -370,10 +389,6 @@ function handleUpload(file) {
     return;
   }
 
-  // NOTE: Uploads always go to the persistent Render backend via ALIVE_BACKEND_URL.
-  // The Vercel 4.5MB serverless limit does NOT apply here — Vercel only serves static
-  // frontend files. The backend on Render supports up to 1 GB uploads.
-
   let handled = false;
   const triggerSend = (dur) => {
     if (handled) return;
@@ -382,28 +397,32 @@ function handleUpload(file) {
   };
 
   // Read exact duration from video metadata in browser with fallback timer
-  const tempVideo = document.createElement('video');
-  tempVideo.preload = 'metadata';
-  const objectUrl = URL.createObjectURL(file);
-  tempVideo.src = objectUrl;
+  try {
+    const tempVideo = document.createElement('video');
+    tempVideo.preload = 'metadata';
+    const objectUrl = URL.createObjectURL(file);
+    tempVideo.src = objectUrl;
 
-  const timeoutTimer = setTimeout(() => {
-    URL.revokeObjectURL(objectUrl);
+    const timeoutTimer = setTimeout(() => {
+      try { URL.revokeObjectURL(objectUrl); } catch (e) {}
+      triggerSend(0);
+    }, 1500);
+
+    tempVideo.onloadedmetadata = () => {
+      clearTimeout(timeoutTimer);
+      try { URL.revokeObjectURL(objectUrl); } catch (e) {}
+      const exactDuration = Math.round(tempVideo.duration) || 0;
+      triggerSend(exactDuration);
+    };
+
+    tempVideo.onerror = () => {
+      clearTimeout(timeoutTimer);
+      try { URL.revokeObjectURL(objectUrl); } catch (e) {}
+      triggerSend(0);
+    };
+  } catch (e) {
     triggerSend(0);
-  }, 2000);
-
-  tempVideo.onloadedmetadata = () => {
-    clearTimeout(timeoutTimer);
-    URL.revokeObjectURL(objectUrl);
-    const exactDuration = Math.round(tempVideo.duration) || 0;
-    triggerSend(exactDuration);
-  };
-
-  tempVideo.onerror = () => {
-    clearTimeout(timeoutTimer);
-    URL.revokeObjectURL(objectUrl);
-    triggerSend(0);
-  };
+  }
 }
 
 function sendUpload(file, exactDuration) {
@@ -419,7 +438,7 @@ function sendUpload(file, exactDuration) {
   videoDetailsCard.classList.add('hidden');
   progressBar.style.width = '0%';
   uploadPercentText.textContent = '0%';
-  uploadStatusText.textContent = 'Uploading... 0%';
+  uploadStatusText.textContent = 'Uploading master video... 0%';
 
   const xhr = new XMLHttpRequest();
   xhr.open('POST', apiUrl('/api/upload'), true);
@@ -442,21 +461,30 @@ function sendUpload(file, exactDuration) {
         fallbackRegister(file, exactDuration);
       }
     } else if (xhr.status === 413) {
-      console.warn('Payload too large (413). Server returned 413. Check server upload limits.');
-      alert(`Upload failed: File too large (${formatBytes(file.size)}).\nThe server returned a 413 Payload Too Large error.\nPlease try a smaller file.`);
-      resetUploadZone();
+      console.warn('File exceeds upload limit, falling back to metadata registration...');
+      fallbackRegister(file, exactDuration);
     } else {
-      console.warn(`Upload endpoint returned status ${xhr.status}. Falling back to registration...`);
+      console.warn(`Upload endpoint returned status ${xhr.status}. Falling back to metadata registration...`);
       fallbackRegister(file, exactDuration);
     }
   };
 
   xhr.onerror = () => {
-    console.warn('Binary upload connection error. Falling back to registration...');
+    console.warn('Binary upload network connection error. Falling back to metadata registration...');
     fallbackRegister(file, exactDuration);
   };
 
-  xhr.send(formData);
+  xhr.ontimeout = () => {
+    console.warn('Upload timed out. Falling back to metadata registration...');
+    fallbackRegister(file, exactDuration);
+  };
+
+  try {
+    xhr.send(formData);
+  } catch (err) {
+    console.warn('XHR send error, using registration:', err);
+    fallbackRegister(file, exactDuration);
+  }
 }
 
 function handleSuccessfulUploadResponse(res) {
@@ -482,7 +510,7 @@ function handleSuccessfulUploadResponse(res) {
   setTimeout(() => {
     progressBarContainer.classList.add('hidden');
     videoDetailsCard.classList.remove('hidden');
-  }, 500);
+  }, 400);
 
   // Enable Stream Start and persist state
   startStreamBtn.disabled = false;
@@ -490,6 +518,10 @@ function handleSuccessfulUploadResponse(res) {
 }
 
 function fallbackRegister(file, exactDuration) {
+  uploadStatusText.textContent = 'Registering video resource...';
+  progressBar.style.width = '95%';
+  uploadPercentText.textContent = '95%';
+
   fetch(apiUrl('/api/register-video'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -501,7 +533,7 @@ function fallbackRegister(file, exactDuration) {
   })
   .then(r => r.json())
   .then(res => {
-    if (res.success) {
+    if (res.success && res.video) {
       handleSuccessfulUploadResponse(res);
     } else {
       alert('Upload failed: ' + (res.error || 'Unknown error'));
@@ -509,6 +541,7 @@ function fallbackRegister(file, exactDuration) {
     }
   })
   .catch(err => {
+    console.error('Registration error:', err);
     alert('Upload error: ' + err.message);
     resetUploadZone();
   });

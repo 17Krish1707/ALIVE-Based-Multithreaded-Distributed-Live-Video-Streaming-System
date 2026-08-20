@@ -63,16 +63,16 @@
               <span class="badge blue">Max: 1 GB</span>
             </div>
             <div class="upload-zone" id="upload-zone">
-              <input type="file" id="video-file-input" accept="video/mp4" class="hidden">
-              <label for="video-file-input" class="upload-label" id="upload-label">
+              <input type="file" id="video-file-input" accept="video/mp4,video/*,.mp4,.m4v,.webm,.mov,.mkv,.avi" class="hidden">
+              <div class="upload-label" id="upload-label">
                 <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                   <polyline points="17 8 12 3 7 8"></polyline>
                   <line x1="12" y1="3" x2="12" y2="15"></line>
                 </svg>
-                <span>Click or Drag MP4 Video to Upload</span>
-                <span class="file-limits">Maximum video size: 1 GB</span>
-              </label>
+                <span>Click or Drag Video to Upload (MP4, WEBM, MOV)</span>
+                <span class="file-limits">Maximum video size: 1 GB • Node.js Worker Threads Streaming</span>
+              </div>
               <div id="upload-progress-container" class="progress-bar-container hidden">
                 <div class="progress-info-row">
                   <span id="upload-status-text">Uploading...</span>
