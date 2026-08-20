@@ -56,6 +56,16 @@ function activateAdminTab(tabId, updateUrl = true) {
     }
   });
 
+  if (tabId === 'clock-sync') {
+    if (typeof drawClockTopology === 'function') {
+      drawClockTopology();
+    }
+  } else if (tabId === 'monitoring') {
+    if (typeof drawTopology === 'function') {
+      drawTopology();
+    }
+  }
+
   if (updateUrl) {
     if (tabId === 'clock-sync') {
       window.history.replaceState(null, '', '/admin/clock' + window.location.search);
@@ -1678,52 +1688,138 @@ function appendClockLog(logStr) {
 }
 
 // ------------------------------------------------------------
-// Clock Topology Canvas Renderer (Visual Packet Movement)
+// Clock Topology Canvas Renderer (Visual Packet Movement & Live Pulses)
 // ------------------------------------------------------------
 
 const clockCanvas = document.getElementById('clock-topology-canvas');
 let clockCtx = clockCanvas ? clockCanvas.getContext('2d') : null;
+let clockCanvasAnimId = null;
+let hoveredClockNode = null;
 
 const clockNodesCoords = {
-  'VTS': { x: 275, y: 55, label: 'VTS\n(Server/Coord)', color: '#6366f1', radius: 24 },
-  'Peer-1': { x: 95, y: 220, label: 'Peer-1\n(+5.0s)', color: '#10b981', radius: 20 },
-  'Peer-2': { x: 195, y: 220, label: 'Peer-2\n(-2.0s)', color: '#10b981', radius: 20 },
-  'Edge-1': { x: 355, y: 220, label: 'Edge-1\n(+3.0s)', color: '#06b6d4', radius: 20 },
-  'CDN-1': { x: 455, y: 220, label: 'CDN-1\n(+7.0s)', color: '#a855f7', radius: 20 }
+  'VTS': { x: 275, y: 60, label: 'VTS (Coordinator)', color: '#6366f1', radius: 26, role: 'TIME_SERVER' },
+  'Peer-1': { x: 85, y: 230, label: 'Peer-1', color: '#10b981', radius: 22, role: 'P2P_NODE' },
+  'Peer-2': { x: 195, y: 230, label: 'Peer-2', color: '#10b981', radius: 22, role: 'P2P_NODE' },
+  'Edge-1': { x: 355, y: 230, label: 'Edge-1', color: '#06b6d4', radius: 22, role: 'EDGE_SERVER' },
+  'CDN-1': { x: 465, y: 230, label: 'CDN-1', color: '#a855f7', radius: 22, role: 'CDN_NODE' }
 };
+
+// Ambient live synchronization telemetry pulses (Always Active)
+const clockAmbientPulses = [
+  { from: 'VTS', to: 'Peer-1', progress: 0.1, speed: 0.010, color: '#10b981' },
+  { from: 'VTS', to: 'Peer-2', progress: 0.4, speed: 0.009, color: '#10b981' },
+  { from: 'VTS', to: 'Edge-1', progress: 0.7, speed: 0.012, color: '#06b6d4' },
+  { from: 'VTS', to: 'CDN-1', progress: 0.9, speed: 0.008, color: '#a855f7' }
+];
 
 function spawnClockPacket(fromId, toId, label = 'MSG') {
   if (!clockNodesCoords[fromId] || !clockNodesCoords[toId]) return;
+  
+  let packetColor = '#f59e0b'; // Default amber for request/poll
+  if (label.includes('ADJUST') || label.includes('RESP') || label.includes('CORRECT')) {
+    packetColor = '#10b981'; // Green for adjustments / responses
+  } else if (label.startsWith('L=')) {
+    packetColor = '#a855f7'; // Purple for Lamport logical time
+  } else if (label.includes('TIME_REQ')) {
+    packetColor = '#38bdf8'; // Sky blue for time requests
+  }
+
   clockAnimationPackets.push({
     from: fromId,
     to: toId,
     label,
     progress: 0,
-    speed: 0.025
+    speed: 0.022,
+    color: packetColor,
+    tail: []
+  });
+
+  const counterBadge = document.getElementById('clock-packet-counter');
+  if (counterBadge) {
+    counterBadge.textContent = `Packets: ${clockAnimationPackets.length} Active`;
+    counterBadge.className = 'badge yellow';
+  }
+}
+
+// Mouse interaction for tooltip
+if (clockCanvas) {
+  clockCanvas.addEventListener('mousemove', (e) => {
+    const rect = clockCanvas.getBoundingClientRect();
+    const scaleX = clockCanvas.width / rect.width;
+    const scaleY = clockCanvas.height / rect.height;
+    const mouseX = (e.clientX - rect.left) * scaleX;
+    const mouseY = (e.clientY - rect.top) * scaleY;
+
+    hoveredClockNode = null;
+    for (const [id, node] of Object.entries(clockNodesCoords)) {
+      const dist = Math.hypot(mouseX - node.x, mouseY - node.y);
+      if (dist <= node.radius + 6) {
+        hoveredClockNode = id;
+        break;
+      }
+    }
+  });
+
+  clockCanvas.addEventListener('mouseleave', () => {
+    hoveredClockNode = null;
   });
 }
 
 function drawClockTopology() {
-  if (!clockCanvas || !clockCtx) return;
+  if (!clockCanvas) return;
+  if (!clockCtx) {
+    clockCtx = clockCanvas.getContext('2d');
+    if (!clockCtx) return;
+  }
+
+  const now = Date.now();
   clockCtx.clearRect(0, 0, clockCanvas.width, clockCanvas.height);
 
   const isLight = document.documentElement.getAttribute('data-theme') === 'light';
 
-  // 1. Draw links from VTS to client nodes
-  clockCtx.strokeStyle = isLight ? 'rgba(0, 0, 0, 0.12)' : 'rgba(255, 255, 255, 0.08)';
-  clockCtx.lineWidth = 2;
-
+  // 1. Draw Links from VTS Coordinator to all nodes
   const vts = clockNodesCoords['VTS'];
   ['Peer-1', 'Peer-2', 'Edge-1', 'CDN-1'].forEach(id => {
     const target = clockNodesCoords[id];
+    
+    // Background connection line
+    clockCtx.strokeStyle = isLight ? 'rgba(0, 0, 0, 0.09)' : 'rgba(255, 255, 255, 0.07)';
+    clockCtx.lineWidth = 3;
     clockCtx.beginPath();
     clockCtx.moveTo(vts.x, vts.y);
     clockCtx.lineTo(target.x, target.y);
     clockCtx.stroke();
+
+    // Subtle glow overlay on links
+    clockCtx.strokeStyle = isLight ? 'rgba(99, 102, 241, 0.08)' : 'rgba(99, 102, 241, 0.15)';
+    clockCtx.lineWidth = 1;
+    clockCtx.stroke();
   });
 
-  // 2. Draw animated packets
-  clockAnimationPackets.forEach((pkt, idx) => {
+  // 2. Draw Ambient Live Synchronization Pulses
+  clockAmbientPulses.forEach(p => {
+    const src = clockNodesCoords[p.from];
+    const dst = clockNodesCoords[p.to];
+    if (src && dst) {
+      p.progress += p.speed;
+      if (p.progress > 1) p.progress = 0;
+
+      const px = src.x + (dst.x - src.x) * p.progress;
+      const py = src.y + (dst.y - src.y) * p.progress;
+
+      // Pulse glow dot
+      clockCtx.fillStyle = p.color;
+      clockCtx.shadowColor = p.color;
+      clockCtx.shadowBlur = 8;
+      clockCtx.beginPath();
+      clockCtx.arc(px, py, 4, 0, Math.PI * 2);
+      clockCtx.fill();
+      clockCtx.shadowBlur = 0;
+    }
+  });
+
+  // 3. Draw Active High-Energy Algorithm Packets
+  clockAnimationPackets.forEach((pkt) => {
     const src = clockNodesCoords[pkt.from];
     const dst = clockNodesCoords[pkt.to];
     if (src && dst) {
@@ -1731,55 +1827,222 @@ function drawClockTopology() {
       const px = src.x + (dst.x - src.x) * pkt.progress;
       const py = src.y + (dst.y - src.y) * pkt.progress;
 
-      // Draw packet bubble
-      clockCtx.fillStyle = '#f59e0b';
+      // Save tail position
+      pkt.tail.push({ x: px, y: py });
+      if (pkt.tail.length > 6) pkt.tail.shift();
+
+      // Draw particle tail
+      for (let t = 0; t < pkt.tail.length; t++) {
+        const tp = pkt.tail[t];
+        const alpha = (t + 1) / pkt.tail.length * 0.5;
+        clockCtx.fillStyle = pkt.color;
+        clockCtx.globalAlpha = alpha;
+        clockCtx.beginPath();
+        clockCtx.arc(tp.x, tp.y, 3 + (t * 0.6), 0, Math.PI * 2);
+        clockCtx.fill();
+      }
+      clockCtx.globalAlpha = 1.0;
+
+      // Draw Packet Core Bubble
+      clockCtx.fillStyle = pkt.color;
+      clockCtx.shadowColor = pkt.color;
+      clockCtx.shadowBlur = 14;
       clockCtx.beginPath();
-      clockCtx.arc(px, py, 8, 0, Math.PI * 2);
-      clockCtx.shadowColor = '#f59e0b';
-      clockCtx.shadowBlur = 10;
+      clockCtx.arc(px, py, 9, 0, Math.PI * 2);
       clockCtx.fill();
       clockCtx.shadowBlur = 0;
 
-      // Draw packet text
-      clockCtx.fillStyle = '#0f172a';
-      clockCtx.font = 'bold 8px Outfit, sans-serif';
+      // Packet Label Badge Background
+      const textWidth = clockCtx.measureText(pkt.label).width || 40;
+      const badgeW = Math.max(textWidth + 14, 46);
+      const badgeH = 18;
+      const badgeX = px - badgeW / 2;
+      const badgeY = py - 26;
+
+      clockCtx.fillStyle = isLight ? 'rgba(255, 255, 255, 0.95)' : 'rgba(15, 23, 42, 0.92)';
+      clockCtx.strokeStyle = pkt.color;
+      clockCtx.lineWidth = 1.5;
+      
+      // Rounded pill rect
+      clockCtx.beginPath();
+      if (clockCtx.roundRect) {
+        clockCtx.roundRect(badgeX, badgeY, badgeW, badgeH, 6);
+      } else {
+        clockCtx.rect(badgeX, badgeY, badgeW, badgeH);
+      }
+      clockCtx.fill();
+      clockCtx.stroke();
+
+      // Packet Label Text
+      clockCtx.fillStyle = isLight ? '#0f172a' : '#f8fafc';
+      clockCtx.font = 'bold 9px Outfit, sans-serif';
       clockCtx.textAlign = 'center';
       clockCtx.textBaseline = 'middle';
-      clockCtx.fillText(pkt.label, px, py - 14);
+      clockCtx.fillText(pkt.label, px, badgeY + badgeH / 2);
     }
   });
 
   // Clean up completed packets
   clockAnimationPackets = clockAnimationPackets.filter(p => p.progress < 1);
 
-  // 3. Draw Nodes
+  // Update dynamic packet counter badge
+  const counterBadge = document.getElementById('clock-packet-counter');
+  if (counterBadge) {
+    if (clockAnimationPackets.length > 0) {
+      counterBadge.textContent = `Packets: ${clockAnimationPackets.length} Active`;
+      counterBadge.className = 'badge yellow';
+    } else {
+      counterBadge.textContent = `Sync Pulse: Active`;
+      counterBadge.className = 'badge green';
+    }
+  }
+
+  // 4. Draw VTS Coordinator Concentric Beacon Wave Rings
+  const waveCycle = (now % 2400) / 2400; // 0 to 1
+  const waveRadius = vts.radius + (waveCycle * 32);
+  const waveAlpha = Math.max(0, (1 - waveCycle) * 0.45);
+  clockCtx.strokeStyle = `rgba(99, 102, 241, ${waveAlpha})`;
+  clockCtx.lineWidth = 2;
+  clockCtx.beginPath();
+  clockCtx.arc(vts.x, vts.y, waveRadius, 0, Math.PI * 2);
+  clockCtx.stroke();
+
+  // 5. Draw All Topology Nodes
   Object.keys(clockNodesCoords).forEach(key => {
     const node = clockNodesCoords[key];
     const nodeData = clockState.nodes.find(n => n.id === key);
-    const offsetStr = nodeData ? (nodeData.offsetMs >= 0 ? `+${(nodeData.offsetMs/1000).toFixed(1)}s` : `${(nodeData.offsetMs/1000).toFixed(1)}s`) : '';
-    const label = `${key}\n(${offsetStr})`;
+    const isVts = key === 'VTS';
+    const isHovered = hoveredClockNode === key;
 
-    clockCtx.fillStyle = isLight ? '#ffffff' : 'rgba(20, 22, 37, 0.95)';
-    clockCtx.strokeStyle = node.color;
-    clockCtx.lineWidth = 3;
+    const offsetMs = nodeData ? (nodeData.offsetMs || 0) : 0;
+    const isSynced = isVts || Math.abs(offsetMs) < 50;
+
+    // Node Pulsing Halo
+    const pulseStrength = (Math.sin(now / 350) + 1) / 2; // 0 to 1
+    const haloRadius = node.radius + 4 + (pulseStrength * (isHovered ? 6 : 3));
+    const haloColor = isVts
+      ? `rgba(99, 102, 241, ${0.25 + pulseStrength * 0.25})`
+      : isSynced
+        ? `rgba(16, 185, 129, ${0.20 + pulseStrength * 0.25})`
+        : `rgba(245, 158, 11, ${0.25 + pulseStrength * 0.30})`;
+
+    clockCtx.fillStyle = haloColor;
+    clockCtx.beginPath();
+    clockCtx.arc(node.x, node.y, haloRadius, 0, Math.PI * 2);
+    clockCtx.fill();
+
+    // Node Background
+    clockCtx.fillStyle = isLight ? '#ffffff' : 'rgba(18, 20, 32, 0.95)';
+    clockCtx.strokeStyle = isHovered ? '#ffffff' : node.color;
+    clockCtx.lineWidth = isHovered ? 3.5 : 2.5;
+    
+    clockCtx.shadowColor = node.color;
+    clockCtx.shadowBlur = isHovered ? 16 : 8;
     clockCtx.beginPath();
     clockCtx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
     clockCtx.fill();
     clockCtx.stroke();
+    clockCtx.shadowBlur = 0;
 
-    clockCtx.fillStyle = isLight ? '#0f172a' : '#f3f4f6';
-    clockCtx.font = 'bold 9px Outfit, sans-serif';
+    // Node Text Content
+    clockCtx.fillStyle = isLight ? '#0f172a' : '#f8fafc';
+    clockCtx.font = `bold ${isVts ? '11px' : '10px'} Outfit, sans-serif`;
     clockCtx.textAlign = 'center';
     clockCtx.textBaseline = 'middle';
+    clockCtx.fillText(key, node.x, node.y - (isVts ? 5 : 6));
 
-    const lines = label.split('\n');
-    clockCtx.fillText(lines[0], node.x, node.y - 5);
-    clockCtx.font = '8px Outfit, sans-serif';
-    clockCtx.fillStyle = isLight ? '#475569' : '#9ca3af';
-    clockCtx.fillText(lines[1], node.x, node.y + 6);
+    // Secondary line: Offset or Status Pill
+    if (isVts) {
+      clockCtx.font = '8px Outfit, sans-serif';
+      clockCtx.fillStyle = '#6366f1';
+      clockCtx.fillText('Master (0ms)', node.x, node.y + 7);
+    } else {
+      const offsetSec = (offsetMs / 1000).toFixed(1);
+      const sign = offsetMs > 0 ? '+' : '';
+      const offsetText = isSynced ? 'SYNCED' : `${sign}${offsetSec}s`;
+      
+      clockCtx.font = 'bold 8px Outfit, sans-serif';
+      clockCtx.fillStyle = isSynced ? '#10b981' : '#f59e0b';
+      clockCtx.fillText(offsetText, node.x, node.y + 6);
+    }
+
+    // Lamport counter indicator (if Lamport active or > 0)
+    const lamportVal = clockState.lamportClocks ? clockState.lamportClocks[key] : null;
+    if (lamportVal !== null && lamportVal !== undefined && (localActiveAlgorithm === 'lamport' || lamportVal > 0)) {
+      const badgeW = 32;
+      const badgeH = 14;
+      const badgeX = node.x - badgeW / 2;
+      const badgeY = node.y + node.radius + 4;
+
+      clockCtx.fillStyle = isLight ? 'rgba(168, 85, 247, 0.15)' : 'rgba(168, 85, 247, 0.25)';
+      clockCtx.strokeStyle = '#a855f7';
+      clockCtx.lineWidth = 1;
+      clockCtx.beginPath();
+      if (clockCtx.roundRect) {
+        clockCtx.roundRect(badgeX, badgeY, badgeW, badgeH, 4);
+      } else {
+        clockCtx.rect(badgeX, badgeY, badgeW, badgeH);
+      }
+      clockCtx.fill();
+      clockCtx.stroke();
+
+      clockCtx.fillStyle = isLight ? '#7e22ce' : '#d8b4fe';
+      clockCtx.font = 'bold 8px Outfit, sans-serif';
+      clockCtx.fillText(`L = ${lamportVal}`, node.x, badgeY + badgeH / 2);
+    }
   });
 
-  requestAnimationFrame(drawClockTopology);
+  // 6. Draw Hover Tooltip if a node is hovered
+  if (hoveredClockNode) {
+    const node = clockNodesCoords[hoveredClockNode];
+    const nodeData = clockState.nodes.find(n => n.id === hoveredClockNode);
+    if (node && nodeData) {
+      const isVts = hoveredClockNode === 'VTS';
+      const offsetMs = nodeData.offsetMs || 0;
+      const statusText = isVts ? 'Master Time Server' : (Math.abs(offsetMs) < 50 ? 'Synchronized' : 'Drift Detected');
+      const correction = nodeData.lastCorrectionMs ? `${nodeData.lastCorrectionMs > 0 ? '+' : ''}${nodeData.lastCorrectionMs}ms` : '0ms';
+
+      const ttW = 160;
+      const ttH = 68;
+      let ttX = node.x - ttW / 2;
+      let ttY = node.y - node.radius - ttH - 12;
+      if (ttY < 10) ttY = node.y + node.radius + 14;
+      if (ttX < 10) ttX = 10;
+      if (ttX + ttW > clockCanvas.width - 10) ttX = clockCanvas.width - ttW - 10;
+
+      // Tooltip background card
+      clockCtx.fillStyle = isLight ? 'rgba(255, 255, 255, 0.98)' : 'rgba(15, 23, 42, 0.95)';
+      clockCtx.strokeStyle = node.color;
+      clockCtx.lineWidth = 1.5;
+      clockCtx.shadowColor = 'rgba(0, 0, 0, 0.35)';
+      clockCtx.shadowBlur = 12;
+
+      clockCtx.beginPath();
+      if (clockCtx.roundRect) {
+        clockCtx.roundRect(ttX, ttY, ttW, ttH, 8);
+      } else {
+        clockCtx.rect(ttX, ttY, ttW, ttH);
+      }
+      clockCtx.fill();
+      clockCtx.stroke();
+      clockCtx.shadowBlur = 0;
+
+      // Tooltip content
+      clockCtx.fillStyle = isLight ? '#0f172a' : '#f8fafc';
+      clockCtx.font = 'bold 11px Outfit, sans-serif';
+      clockCtx.textAlign = 'left';
+      clockCtx.textBaseline = 'top';
+      clockCtx.fillText(`${nodeData.name || hoveredClockNode}`, ttX + 10, ttY + 8);
+
+      clockCtx.font = '9px Outfit, sans-serif';
+      clockCtx.fillStyle = isLight ? '#475569' : '#94a3b8';
+      clockCtx.fillText(`Type: ${nodeData.type || 'Node'}`, ttX + 10, ttY + 24);
+      clockCtx.fillText(`Offset: ${offsetMs >= 0 ? '+' : ''}${offsetMs} ms`, ttX + 10, ttY + 38);
+      clockCtx.fillText(`Status: ${statusText}`, ttX + 10, ttY + 52);
+    }
+  }
+
+  clockCanvasAnimId = requestAnimationFrame(drawClockTopology);
 }
 
 // Initial draw and load
@@ -1797,3 +2060,4 @@ fetch(apiUrl('/api/clock/state'))
     }
   })
   .catch(() => {});
+
