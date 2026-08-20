@@ -360,22 +360,15 @@ function handleUpload(file) {
     return;
   }
 
-  // Vercel Serverless Function 4.5 MB Payload Limit Check
-  const isVercel = window.location.hostname.includes('vercel.app');
-  const VERCEL_MAX_PAYLOAD = 4.5 * 1024 * 1024; // 4.5 MB
-  if (isVercel && file.size > VERCEL_MAX_PAYLOAD) {
-    alert(`[Vercel Deployment Notice]\nVercel Serverless Functions limit file uploads to 4.5 MB (Selected file: ${formatBytes(file.size)}).\n\nRegistering video metadata fallback automatically. For full 1 GB video uploads, WebSockets, and multithreaded streaming, deploy to a Node server host like Render or Railway.`);
-  }
+  // NOTE: Uploads always go to the persistent Render backend via ALIVE_BACKEND_URL.
+  // The Vercel 4.5MB serverless limit does NOT apply here — Vercel only serves static
+  // frontend files. The backend on Render supports up to 1 GB uploads.
 
   let handled = false;
   const triggerSend = (dur) => {
     if (handled) return;
     handled = true;
-    if (isVercel && file.size > VERCEL_MAX_PAYLOAD) {
-      fallbackRegister(file, dur);
-    } else {
-      sendUpload(file, dur);
-    }
+    sendUpload(file, dur);
   };
 
   // Read exact duration from video metadata in browser with fallback timer
@@ -439,9 +432,9 @@ function sendUpload(file, exactDuration) {
         fallbackRegister(file, exactDuration);
       }
     } else if (xhr.status === 413) {
-      console.warn('Payload too large (413). Vercel serverless functions limit request bodies to 4.5 MB. Falling back to serverless registration...');
-      alert(`Upload notice: Server returned 413 Payload Too Large (Vercel Serverless Function 4.5 MB limit).\nFalling back to video metadata registration...`);
-      fallbackRegister(file, exactDuration);
+      console.warn('Payload too large (413). Server returned 413. Check server upload limits.');
+      alert(`Upload failed: File too large (${formatBytes(file.size)}).\nThe server returned a 413 Payload Too Large error.\nPlease try a smaller file.`);
+      resetUploadZone();
     } else {
       console.warn(`Upload endpoint returned status ${xhr.status}. Falling back to registration...`);
       fallbackRegister(file, exactDuration);
