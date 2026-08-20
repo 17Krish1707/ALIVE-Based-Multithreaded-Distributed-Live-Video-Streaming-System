@@ -13,5 +13,8 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: SERVER_PORT
+        value: "10000"
     # Render automatically sets PORT — server.js reads it via:
     # process.env.PORT || process.env.SERVER_PORT || 6000
+    # Free tier instances spin down after inactivity; first request may take ~30s to wake
