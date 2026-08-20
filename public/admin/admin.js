@@ -58,11 +58,11 @@ function activateAdminTab(tabId, updateUrl = true) {
 
   if (tabId === 'clock-sync') {
     if (typeof drawClockTopology === 'function') {
-      drawClockTopology();
+      try { drawClockTopology(); } catch (e) {}
     }
   } else if (tabId === 'monitoring') {
     if (typeof drawTopology === 'function') {
-      drawTopology();
+      try { drawTopology(); } catch (e) {}
     }
   }
 
@@ -97,7 +97,6 @@ function initRouteOnLoad() {
     activateAdminTab('monitoring', false);
   }
 }
-initRouteOnLoad();
 
 // ============================================================
 // BACKEND URL RESOLUTION & SOCKET.IO INITIALIZATION
@@ -925,8 +924,8 @@ function updateAllocationHistoryUI(history) {
 // ============================================================
 // THEME-AWARE TOPOLOGY CANVAS RENDER
 // ============================================================
-const canvas = document.getElementById('topology-canvas');
-const ctx = canvas.getContext('2d');
+let canvas = document.getElementById('topology-canvas');
+let ctx = canvas ? canvas.getContext('2d') : null;
 
 const nodes = {
   vts: { x: 275, y: 55, label: 'Tracker Server', type: 'SERVER', color: '#6366f1' },
@@ -941,6 +940,11 @@ const nodes = {
 let pulses = [];
 
 function drawTopology() {
+  if (!canvas) canvas = document.getElementById('topology-canvas');
+  if (!canvas) return;
+  if (!ctx) ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   const isLight = document.documentElement.getAttribute('data-theme') === 'light';
@@ -2093,4 +2097,8 @@ fetch(apiUrl('/api/clock/state'))
     }
   })
   .catch(() => {});
+
+// Initialize active route after all DOM elements and canvas contexts are ready
+initRouteOnLoad();
+
 
