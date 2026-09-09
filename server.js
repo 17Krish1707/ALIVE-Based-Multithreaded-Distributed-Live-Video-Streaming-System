@@ -26,9 +26,12 @@ import {
   getSourceSwitches, 
   getSourceAllocationHistory, 
   getPerformanceMetrics,
-  getVideoRecord
+  getVideoRecord,
+  getElectionHistory,
+  getElectionMessages
 } from './db.js';
 import ClockManager from './experiments/clock/clockManager.js';
+import ElectionManager from './experiments/election/electionManager.js';
 
 dotenv.config();
 
@@ -114,7 +117,7 @@ app.get(['/client', '/client/'], (req, res) => {
   res.sendFile(path.join(process.cwd(), 'public', 'client', 'index.html'));
 });
 
-app.get(['/admin', '/admin/', '/admin/clock', '/admin/clock/'], (req, res) => {
+app.get(['/admin', '/admin/', '/admin/clock', '/admin/clock/', '/admin/election', '/admin/election/'], (req, res) => {
   res.sendFile(path.join(process.cwd(), 'public', 'admin', 'index.html'));
 });
 
@@ -358,6 +361,85 @@ function selectBestSource() {
   }
   return selected;
 }
+
+// Dynamic VTS Failover Reallocation Logic
+async function handleSourceFailover(failedSourceId) {
+  const source = sources.find(s => s.id === failedSourceId);
+  if (!source || source.connected <= 0) return;
+
+  logEvent(`[VTS FAILOVER] Source ${source.id} offline with ${source.connected} active clients. Initializing automatic VTS reallocation...`);
+
+  const affectedSessions = await getActiveSessions();
+  const affectedClients = affectedSessions.filter(s => s.current_source === source.id);
+
+  for (const clientSession of affectedClients) {
+    const cid = clientSession.client_id;
+    const now = new Date().toISOString();
+
+    // Release old allocation
+    source.connected = Math.max(0, source.connected - 1);
+    const durationSecs = clientSession.stream_start_time 
+      ? Math.round((Date.now() - new Date(clientSession.stream_start_time).getTime()) / 1000) 
+      : 0;
+    await releaseSourceAllocation(cid, source.id, now, durationSecs);
+
+    // Find new backup source
+    const newSource = selectBestSource();
+    if (newSource) {
+      newSource.connected++;
+      newSource.totalRequests++;
+
+      logEvent(`Failover reallocation: Client ${cid} moved from ${source.id} -> ${newSource.id} (${newSource.type}, Latency: ${newSource.latency} ms).`);
+      clockManager.handleStreamingEvent('SOURCE_CHANGED', { clientId: cid, oldSourceId: source.id, newSourceId: newSource.id });
+
+      const workerInfo = activeWorkers.get(cid);
+      if (workerInfo) {
+        workerInfo.sourceId = newSource.id;
+      }
+
+      await updateClientSession(cid, 'STREAMING', { current_source: newSource.id });
+      await addSourceAllocation(cid, newSource.id, newSource.type, now);
+      await logSourceSwitch(cid, source.id, newSource.id, 'Source node offline', now);
+
+      const clientSocketId = activeSessionsMap.get(cid);
+      if (clientSocketId) {
+        io.to(clientSocketId).emit('source_changed', {
+          oldSourceId: source.id,
+          newSourceId: newSource.id,
+          newSourceType: newSource.type,
+          latency: newSource.latency,
+          switchTime: now,
+          reason: 'Source server became unavailable'
+        });
+      }
+    } else {
+      logEvent(`Failover reallocation failed: No online backup sources available for ${cid}. Terminating stream.`);
+      await updateClientSession(cid, 'FAILED', { disconnect_time: now });
+
+      const workerInfo = activeWorkers.get(cid);
+      if (workerInfo && workerInfo.worker) {
+        workerInfo.worker.terminate();
+        activeWorkers.delete(cid);
+      }
+
+      const clientSocketId = activeSessionsMap.get(cid);
+      if (clientSocketId) {
+        io.to(clientSocketId).emit('stream_error', { message: 'Stream lost: Source became unavailable and no fallback nodes are online.' });
+      }
+    }
+  }
+
+  io.to('admins').emit('source_update', sources);
+  io.to('admins').emit('client_list_update', await getAllSessions());
+  io.to('admins').emit('switches_update', (await getSourceSwitches()).slice(0, 15));
+  io.to('admins').emit('history_update', (await getSourceAllocationHistory()).slice(0, 15));
+  io.to('admins').emit('metrics_update', await getPerformanceMetrics());
+  io.to('admins').emit('thread_list_update', getActiveThreadsData());
+  io.to('admins').emit('thread_metrics_update', getMultithreadingMetrics());
+}
+
+// Distributed Election Algorithms Manager Instance (Bully & Ring)
+const electionManager = new ElectionManager(sources, io, logEvent, handleSourceFailover);
 
 // ============================================================
 // API ENDPOINTS
@@ -758,6 +840,104 @@ app.post('/api/clock/step', (req, res) => {
 });
 
 // ============================================================
+// DISTRIBUTED ELECTION ALGORITHMS (BULLY & RING) REST APIs
+// ============================================================
+
+// Get Election Engine State
+app.get('/api/election/state', (req, res) => {
+  try {
+    res.json(electionManager.getState());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Start Election (Bully or Ring)
+app.post('/api/election/start', async (req, res) => {
+  try {
+    const { algorithm, initiatorId } = req.body || {};
+    const result = await electionManager.startElection(algorithm || 'BULLY', initiatorId || 'Peer-1');
+    res.json({ success: true, result, state: electionManager.getState() });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// Fail Node (triggers real backend node failure and VTS failover if streaming)
+app.post('/api/election/nodes/:id/fail', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await electionManager.failNode(id);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Recover Node
+app.post('/api/election/nodes/:id/recover', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await electionManager.recoverNode(id);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Set Election Configuration (Auto election, recovery policy, transmission delay)
+app.post('/api/election/config', (req, res) => {
+  try {
+    const state = electionManager.setConfig(req.body || {});
+    res.json({ success: true, state });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Reset Election State to default (CDN-1 is coordinator)
+app.post('/api/election/reset', (req, res) => {
+  try {
+    const state = electionManager.resetAll();
+    res.json({ success: true, state });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Get Election History from Database
+app.get('/api/election/history', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit, 10) || 20;
+    const history = await getElectionHistory(limit);
+    res.json({ success: true, history });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Get Election Messages from Database
+app.get('/api/election/messages', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit, 10) || 50;
+    const electionId = req.query.electionId ? parseInt(req.query.electionId, 10) : null;
+    const messages = await getElectionMessages(electionId, limit);
+    res.json({ success: true, messages });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Get Bully vs Ring Comparison
+app.get('/api/election/comparison', (req, res) => {
+  try {
+    res.json(electionManager.getComparison());
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ============================================================
 // WEBSOCKET COMMUNICATION & MULTITHREADING
 // ============================================================
 
@@ -783,7 +963,9 @@ io.on('connection', (socket) => {
       sessions: allSessions.slice(0, 15),
       threads: getActiveThreadsData(),
       threadMetrics: getMultithreadingMetrics(),
-      clock: clockManager.getState()
+      clock: clockManager.getState(),
+      election: electionManager.getState(),
+      electionHistory: (await getElectionHistory(15))
     });
   });
 
@@ -1067,88 +1249,18 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Admin toggles source availability (failover demo)
+  // Admin toggles source availability (failover demo & integrated election)
   socket.on('toggle_source_online', async (data) => {
     const source = sources.find(s => s.id === data.sourceId);
     if (!source) return;
 
-    source.online = !source.online;
-    logEvent(`Source node ${source.id} toggled ${source.online ? 'ONLINE' : 'OFFLINE'}.`);
-
-    // If source goes offline, trigger failover switching for connected clients
-    if (!source.online && source.connected > 0) {
-      logEvent(`Source ${source.id} went offline with ${source.connected} active clients. Initializing automatic VTS reallocation...`);
-      
-      const affectedSessions = await getActiveSessions();
-      const affectedClients = affectedSessions.filter(s => s.current_source === source.id);
-
-      for (const clientSession of affectedClients) {
-        const cid = clientSession.client_id;
-        const now = new Date().toISOString();
-        
-        // Release old allocation
-        source.connected = Math.max(0, source.connected - 1);
-        const durationSecs = Math.round((Date.now() - new Date(clientSession.stream_start_time).getTime()) / 1000);
-        await releaseSourceAllocation(cid, source.id, now, durationSecs);
-
-        // Find new source
-        const newSource = selectBestSource();
-        if (newSource) {
-          newSource.connected++;
-          newSource.totalRequests++;
-          
-          logEvent(`Failover reallocation: Client ${cid} moved from ${source.id} -> ${newSource.id} (${newSource.type}, Latency: ${newSource.latency} ms).`);
-          clockManager.handleStreamingEvent('SOURCE_CHANGED', { clientId: cid, oldSourceId: source.id, newSourceId: newSource.id });
-          
-          // Update worker info with new source
-          const workerInfo = activeWorkers.get(cid);
-          if (workerInfo) {
-            workerInfo.sourceId = newSource.id;
-          }
-
-          // Update DB
-          await updateClientSession(cid, 'STREAMING', { current_source: newSource.id });
-          await addSourceAllocation(cid, newSource.id, newSource.type, now);
-          await logSourceSwitch(cid, source.id, newSource.id, 'Source node offline', now);
-
-          // Alert client socket
-          const clientSocketId = activeSessionsMap.get(cid);
-          if (clientSocketId) {
-            io.to(clientSocketId).emit('source_changed', {
-              oldSourceId: source.id,
-              newSourceId: newSource.id,
-              newSourceType: newSource.type,
-              latency: newSource.latency,
-              switchTime: now,
-              reason: 'Source server became unavailable'
-            });
-          }
-        } else {
-          // Fail the client session
-          logEvent(`Failover reallocation failed: No online backup sources available for ${cid}. Terminating stream.`);
-          await updateClientSession(cid, 'FAILED', { disconnect_time: now });
-          
-          const workerInfo = activeWorkers.get(cid);
-          if (workerInfo && workerInfo.worker) {
-            workerInfo.worker.terminate();
-            activeWorkers.delete(cid);
-          }
-
-          const clientSocketId = activeSessionsMap.get(cid);
-          if (clientSocketId) {
-            io.to(clientSocketId).emit('stream_error', { message: 'Stream lost: Source became unavailable and no fallback nodes are online.' });
-          }
-        }
-      }
+    if (source.online) {
+      await electionManager.failNode(source.id);
+    } else {
+      await electionManager.recoverNode(source.id);
     }
 
     io.to('admins').emit('source_update', sources);
-    io.to('admins').emit('client_list_update', await getAllSessions());
-    io.to('admins').emit('switches_update', (await getSourceSwitches()).slice(0, 15));
-    io.to('admins').emit('history_update', (await getSourceAllocationHistory()).slice(0, 15));
-    io.to('admins').emit('metrics_update', await getPerformanceMetrics());
-    io.to('admins').emit('thread_list_update', getActiveThreadsData());
-    io.to('admins').emit('thread_metrics_update', getMultithreadingMetrics());
   });
 
   // Client manually disconnects watch session
@@ -1200,6 +1312,46 @@ io.on('connection', (socket) => {
 
   socket.on('clock_step', (data) => {
     clockManager.stepNext(data?.algorithm);
+  });
+
+  // Election Algorithm Socket Listeners
+  socket.on('election_get_state', () => {
+    socket.emit('election:state', electionManager.getState());
+  });
+
+  socket.on('election_start', async (data) => {
+    try {
+      await electionManager.startElection(data?.algorithm, data?.initiatorId);
+    } catch (err) {
+      socket.emit('election:error', { message: err.message });
+    }
+  });
+
+  socket.on('election_fail_node', async (data) => {
+    try {
+      await electionManager.failNode(data?.nodeId);
+      io.to('admins').emit('source_update', sources);
+    } catch (err) {
+      socket.emit('election:error', { message: err.message });
+    }
+  });
+
+  socket.on('election_recover_node', async (data) => {
+    try {
+      await electionManager.recoverNode(data?.nodeId);
+      io.to('admins').emit('source_update', sources);
+    } catch (err) {
+      socket.emit('election:error', { message: err.message });
+    }
+  });
+
+  socket.on('election_set_config', (data) => {
+    electionManager.setConfig(data || {});
+  });
+
+  socket.on('election_reset', () => {
+    electionManager.resetAll();
+    io.to('admins').emit('source_update', sources);
   });
 
   // Handle Socket Disconnect

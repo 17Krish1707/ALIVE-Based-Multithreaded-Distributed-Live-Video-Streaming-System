@@ -18,6 +18,7 @@
       <nav>
         <ul>
           <li class="active"><a href="#monitoring">System Status</a></li>
+          <li><a href="#election-lab">Election Lab</a></li>
           <li><a href="#clock-sync">Clock Sync Lab</a></li>
           <li><a href="#deadlock-demo">Deadlock Lab</a></li>
           <li><a href="/client" target="_blank">Launch Client (Tab)</a></li>
@@ -845,6 +846,257 @@
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section: Distributed Election Algorithms Laboratory (Bully & Ring) -->
+      <section id="election-lab" class="tab-content">
+        <header class="content-header">
+          <div>
+            <h1>Distributed Leader Election Laboratory</h1>
+            <p class="subtitle">Real Bully & Ring Algorithms • Live Dynamic Failover • Active Streaming Context</p>
+          </div>
+          <div class="header-actions">
+            <button id="theme-toggle-election" class="theme-toggle-btn" title="Toggle Light / Dark Mode">
+              <span class="theme-icon">☀️</span>
+              <span class="theme-text">Light Mode</span>
+            </button>
+            <div class="stream-control-badge">
+              <span id="election-active-coordinator-badge" class="badge gold">COORDINATOR: CDN-1 (ID 4)</span>
+              <span id="election-algo-indicator" class="badge blue">BULLY ALGORITHM</span>
+            </div>
+          </div>
+        </header>
+
+        <!-- Live Streaming System Context Bar (Requirements 20 & 21) -->
+        <div class="card live-system-context-card">
+          <div class="card-title flex-between">
+            <div class="title-with-icon">
+              <span class="live-dot-pulse" id="election-stream-pulse"></span>
+              <h3>Live Distributed System Context</h3>
+            </div>
+            <span id="election-stream-status-pill" class="badge grey">Stream: OFFLINE</span>
+          </div>
+          <div class="context-stats-grid">
+            <div class="ctx-item">
+              <span class="ctx-lbl">Broadcast State</span>
+              <strong id="ctx-stream-status" class="text-danger">OFFLINE</strong>
+            </div>
+            <div class="ctx-item">
+              <span class="ctx-lbl">Master Video</span>
+              <strong id="ctx-video-name">sample_live_video.mp4</strong>
+            </div>
+            <div class="ctx-item">
+              <span class="ctx-lbl">Active Clients</span>
+              <strong id="ctx-active-clients" class="text-primary">0</strong>
+            </div>
+            <div class="ctx-item">
+              <span class="ctx-lbl">Current Coordinator</span>
+              <strong id="ctx-current-coordinator" class="text-warning">CDN-1 (ID: 4)</strong>
+            </div>
+          </div>
+          <div class="allocations-bar">
+            <span class="alloc-title">Active Source Allocations:</span>
+            <span id="ctx-allocations-list" class="alloc-chips">
+              <span class="chip text-muted font-italic">No active client streams</span>
+            </span>
+          </div>
+        </div>
+
+        <!-- Coordinator Failure Alert Banner (shown when failure detected) -->
+        <div id="election-coordinator-failure-banner" class="election-alert-banner hidden">
+          <div class="alert-icon">⚠️</div>
+          <div class="alert-content">
+            <h4>COORDINATOR FAILURE DETECTED</h4>
+            <p id="election-failure-banner-msg">The active distributed coordinator is unavailable. Heartbeat lost. Select an initiator below to start an election, or enable Auto Election.</p>
+          </div>
+        </div>
+
+        <!-- Distributed Node Cards & Heartbeat HUD -->
+        <div class="section-grid-4" id="election-nodes-grid">
+          <!-- Populated dynamically: Peer-1, Peer-2, Edge-1, CDN-1 -->
+        </div>
+
+        <!-- Election Control & Configuration Panel -->
+        <div class="card election-control-panel-card">
+          <div class="card-title">
+            <h3>Distributed Election Controls</h3>
+          </div>
+          <div class="election-controls-grid">
+            <!-- Left: Algorithm & Mode Selectors -->
+            <div class="ctrl-group">
+              <label class="ctrl-label">Election Algorithm</label>
+              <div class="btn-toggle-group">
+                <button id="btn-select-bully" class="btn-toggle active" data-algo="BULLY">Bully Algorithm</button>
+                <button id="btn-select-ring" class="btn-toggle" data-algo="RING">Ring Algorithm</button>
+              </div>
+
+              <div class="switch-row">
+                <label class="switch-lbl" for="btn-toggle-auto-election">
+                  <strong>Automatic Election on Coordinator Failure:</strong>
+                  <span class="switch-sub">When enabled, backend automatically initiates election when coordinator heartbeat expires</span>
+                </label>
+                <button id="btn-toggle-auto-election" class="btn btn-sm btn-grey">AUTO ELECTION: OFF</button>
+              </div>
+            </div>
+
+            <!-- Middle: Initiator & Policy Controls -->
+            <div class="ctrl-group">
+              <label class="ctrl-label" for="election-initiator-select">Election Initiator Node</label>
+              <select id="election-initiator-select" class="form-select">
+                <option value="Peer-1">Peer-1 (ID 1, P2P Peer)</option>
+                <option value="Peer-2">Peer-2 (ID 2, P2P Peer)</option>
+                <option value="Edge-1">Edge-1 (ID 3, Edge Server)</option>
+              </select>
+
+              <div class="recovery-policy-row">
+                <label class="ctrl-label">On Higher-Priority Recovery:</label>
+                <div class="btn-toggle-group-small">
+                  <button id="btn-policy-keep" class="btn-toggle-sm active" data-policy="KEEP">Keep Current Leader</button>
+                  <button id="btn-policy-trigger" class="btn-toggle-sm" data-policy="TRIGGER_ELECTION">Trigger New Election</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right: Action Buttons & Simulation Speed -->
+            <div class="ctrl-group actions-group">
+              <div class="speed-slider-wrap">
+                <label for="election-speed-slider">Hop Transmission Delay: <strong id="election-speed-lbl">350 ms</strong></label>
+                <input type="range" id="election-speed-slider" min="100" max="1200" step="50" value="350">
+              </div>
+              <div class="btn-cluster-row">
+                <button id="btn-start-election" class="btn btn-success btn-lg">Start Election</button>
+                <button id="btn-reset-election" class="btn btn-grey">Reset All Nodes</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Middle Section Grid: Topology Canvas & Live Terminal -->
+        <div class="section-grid-2">
+          <!-- Topology & Animated Message Canvas Card -->
+          <div class="card canvas-card">
+            <div class="card-title flex-between">
+              <h3>Live Election Network Topology & Message Flow</h3>
+              <span id="topology-current-winner-badge" class="badge gold">Leader: CDN-1</span>
+            </div>
+            <div class="canvas-wrapper">
+              <canvas id="election-topology-canvas" width="550" height="350"></canvas>
+            </div>
+            <div class="topology-legend">
+              <span class="legend-item"><span class="dot gold"></span> Coordinator</span>
+              <span class="legend-item"><span class="dot green"></span> Online Node</span>
+              <span class="legend-item"><span class="dot red"></span> Offline Node</span>
+              <span class="legend-item"><span class="line purple"></span> Ring Link / Message Route</span>
+            </div>
+          </div>
+
+          <!-- Real-Time Election Terminal / Console -->
+          <div class="card console-card">
+            <div class="card-title flex-between">
+              <h3>Real-Time Election Terminal Output</h3>
+              <button id="btn-clear-election-logs" class="btn btn-xs btn-grey">Clear</button>
+            </div>
+            <div class="console-box" id="election-console-logs">
+              <!-- Streaming backend election events -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Metrics & Algorithm Comparison Grid -->
+        <div class="section-grid-2">
+          <!-- Execution Metrics Card -->
+          <div class="card">
+            <div class="card-title">
+              <h3>Last Election Execution Metrics</h3>
+            </div>
+            <div class="metrics-details-list" id="election-last-metrics">
+              <div class="metric-row"><span>Algorithm:</span> <strong id="em-algorithm">-</strong></div>
+              <div class="metric-row"><span>Initiator:</span> <strong id="em-initiator">-</strong></div>
+              <div class="metric-row"><span>Previous Coordinator:</span> <strong id="em-prev-coord">-</strong></div>
+              <div class="metric-row"><span>New Coordinator:</span> <strong id="em-new-coord" class="text-warning">-</strong></div>
+              <div class="metric-row"><span>Execution Duration:</span> <strong id="em-duration">-</strong></div>
+              <div class="metric-row"><span>Total Messages:</span> <strong id="em-total-msgs">-</strong></div>
+              <div class="metric-row"><span>Message Breakdown:</span> <strong id="em-breakdown">-</strong></div>
+              <div class="metric-row"><span>Ring Token Route:</span> <strong id="em-token-route">-</strong></div>
+            </div>
+          </div>
+
+          <!-- Bully vs Ring Real Comparison Card -->
+          <div class="card">
+            <div class="card-title">
+              <h3>Algorithm Comparison (Bully vs Ring)</h3>
+            </div>
+            <div class="table-container">
+              <table class="comparison-table">
+                <thead>
+                  <tr>
+                    <th>Metric</th>
+                    <th>Bully Algorithm</th>
+                    <th>Ring Algorithm</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Messages Sent</strong></td>
+                    <td id="comp-bully-msgs">-</td>
+                    <td id="comp-ring-msgs">-</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Execution Duration</strong></td>
+                    <td id="comp-bully-dur">-</td>
+                    <td id="comp-ring-dur">-</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Elected Coordinator</strong></td>
+                    <td id="comp-bully-winner">-</td>
+                    <td id="comp-ring-winner">-</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Traffic Complexity</strong></td>
+                    <td>O(N²) Worst Case</td>
+                    <td>2N Messages (O(N))</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Offline Node Handling</strong></td>
+                    <td>Unresponsive nodes skipped</td>
+                    <td>Tokens route past offline hops</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Persisted Election History Table -->
+        <div class="card table-card">
+          <div class="card-title flex-between">
+            <h3>Persisted Election History (SQLite)</h3>
+            <button id="btn-refresh-election-history" class="btn btn-sm btn-grey">Refresh History</button>
+          </div>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Algorithm</th>
+                  <th>Initiator</th>
+                  <th>Previous Leader</th>
+                  <th>New Coordinator</th>
+                  <th>Duration</th>
+                  <th>Messages</th>
+                  <th>Participants</th>
+                  <th>Timestamp</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="election-history-table-body">
+                <tr>
+                  <td colspan="10" class="text-center font-italic text-muted">No election runs recorded yet.</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </section>

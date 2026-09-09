@@ -60,6 +60,10 @@ function activateAdminTab(tabId, updateUrl = true) {
     if (typeof drawClockTopology === 'function') {
       try { drawClockTopology(); } catch (e) {}
     }
+  } else if (tabId === 'election-lab') {
+    if (typeof drawElectionTopology === 'function') {
+      try { drawElectionTopology(); } catch (e) {}
+    }
   } else if (tabId === 'monitoring') {
     if (typeof drawTopology === 'function') {
       try { drawTopology(); } catch (e) {}
@@ -69,6 +73,8 @@ function activateAdminTab(tabId, updateUrl = true) {
   if (updateUrl) {
     if (tabId === 'clock-sync') {
       window.history.replaceState(null, '', '/admin/clock' + window.location.search);
+    } else if (tabId === 'election-lab') {
+      window.history.replaceState(null, '', '/admin/election' + window.location.search);
     } else {
       window.history.replaceState(null, '', '/admin#' + tabId);
     }
@@ -91,6 +97,8 @@ function initRouteOnLoad() {
   const hash = window.location.hash;
   if (path === '/admin/clock' || path === '/admin/clock/' || hash === '#clock-sync') {
     activateAdminTab('clock-sync', false);
+  } else if (path === '/admin/election' || path === '/admin/election/' || hash === '#election-lab') {
+    activateAdminTab('election-lab', false);
   } else if (hash === '#deadlock-demo') {
     activateAdminTab('deadlock-demo', false);
   } else {
@@ -259,6 +267,14 @@ socket.on('admin_init', (data) => {
   if (data.clock) {
     updateClockState(data.clock);
   }
+
+  // Election state
+  if (data.election) {
+    updateElectionState(data.election);
+  }
+  if (data.electionHistory) {
+    updateElectionHistoryUI(data.electionHistory);
+  }
 });
 
 // Periodic HTTP REST Polling
@@ -300,11 +316,13 @@ socket.on('thread_metrics_update', (metrics) => {
 socket.on('source_update', (sources) => {
   sourcesState = sources;
   updateSourcesUI(sources);
+  if (typeof updateElectionContext === 'function') updateElectionContext();
 });
 
 socket.on('client_list_update', (sessions) => {
   clientsState = sessions;
   updateClientTableUI(sessions);
+  if (typeof updateElectionContext === 'function') updateElectionContext();
 });
 
 socket.on('history_update', (history) => {
@@ -317,6 +335,7 @@ socket.on('thread_list_update', (threads) => {
 
 socket.on('stream_status_change', (stream) => {
   updateStreamControlUI(stream);
+  if (typeof updateElectionContext === 'function') updateElectionContext();
 });
 
 // ============================================================
@@ -2098,7 +2117,820 @@ fetch(apiUrl('/api/clock/state'))
   })
   .catch(() => {});
 
+// ============================================================
+// DISTRIBUTED ELECTION ALGORITHMS (BULLY & RING) FRONTEND
+// ============================================================
+
+// DOM Bindings
+const electionActiveCoordinatorBadge = document.getElementById('election-active-coordinator-badge');
+const electionAlgoIndicator = document.getElementById('election-algo-indicator');
+const electionStreamPulse = document.getElementById('election-stream-pulse');
+const electionStreamStatusPill = document.getElementById('election-stream-status-pill');
+const ctxStreamStatus = document.getElementById('ctx-stream-status');
+const ctxVideoName = document.getElementById('ctx-video-name');
+const ctxActiveClients = document.getElementById('ctx-active-clients');
+const ctxCurrentCoordinator = document.getElementById('ctx-current-coordinator');
+const ctxAllocationsList = document.getElementById('ctx-allocations-list');
+const electionFailureBanner = document.getElementById('election-coordinator-failure-banner');
+const electionFailureBannerMsg = document.getElementById('election-failure-banner-msg');
+const electionNodesGrid = document.getElementById('election-nodes-grid');
+
+const btnSelectBully = document.getElementById('btn-select-bully');
+const btnSelectRing = document.getElementById('btn-select-ring');
+const btnToggleAutoElection = document.getElementById('btn-toggle-auto-election');
+const electionInitiatorSelect = document.getElementById('election-initiator-select');
+const btnPolicyKeep = document.getElementById('btn-policy-keep');
+const btnPolicyTrigger = document.getElementById('btn-policy-trigger');
+const electionSpeedSlider = document.getElementById('election-speed-slider');
+const electionSpeedLbl = document.getElementById('election-speed-lbl');
+const btnStartElection = document.getElementById('btn-start-election');
+const btnResetElection = document.getElementById('btn-reset-election');
+
+const electionTopologyCanvas = document.getElementById('election-topology-canvas');
+const electionTopologyCtx = electionTopologyCanvas ? electionTopologyCanvas.getContext('2d') : null;
+const topologyCurrentWinnerBadge = document.getElementById('topology-current-winner-badge');
+const electionConsoleLogs = document.getElementById('election-console-logs');
+const btnClearElectionLogs = document.getElementById('btn-clear-election-logs');
+
+const emAlgorithm = document.getElementById('em-algorithm');
+const emInitiator = document.getElementById('em-initiator');
+const emPrevCoord = document.getElementById('em-prev-coord');
+const emNewCoord = document.getElementById('em-new-coord');
+const emDuration = document.getElementById('em-duration');
+const emTotalMsgs = document.getElementById('em-total-msgs');
+const emBreakdown = document.getElementById('em-breakdown');
+const emTokenRoute = document.getElementById('em-token-route');
+
+const compBullyMsgs = document.getElementById('comp-bully-msgs');
+const compRingMsgs = document.getElementById('comp-ring-msgs');
+const compBullyDur = document.getElementById('comp-bully-dur');
+const compRingDur = document.getElementById('comp-ring-dur');
+const compBullyWinner = document.getElementById('comp-bully-winner');
+const compRingWinner = document.getElementById('comp-ring-winner');
+const electionHistoryTableBody = document.getElementById('election-history-table-body');
+const btnRefreshElectionHistory = document.getElementById('btn-refresh-election-history');
+
+// State Variables
+let currentElectionState = {
+  currentCoordinator: 'CDN-1',
+  coordinatorElectionId: 4,
+  coordinatorFailureDetected: false,
+  currentAlgorithm: 'BULLY',
+  autoElection: false,
+  recoveryPolicy: 'KEEP',
+  isElectionRunning: false,
+  messageDelayMs: 350,
+  nodes: [
+    { id: 'Peer-1', name: 'Peer-1', type: 'P2P Peer', electionId: 1, online: true, isCoordinator: false, heartbeatStatus: 'ACTIVE', connected: 0 },
+    { id: 'Peer-2', name: 'Peer-2', type: 'P2P Peer', electionId: 2, online: true, isCoordinator: false, heartbeatStatus: 'ACTIVE', connected: 0 },
+    { id: 'Edge-1', name: 'Edge-1', type: 'Edge Server', electionId: 3, online: true, isCoordinator: false, heartbeatStatus: 'ACTIVE', connected: 0 },
+    { id: 'CDN-1',  name: 'CDN-1',  type: 'CDN Node',   electionId: 4, online: true, isCoordinator: true,  heartbeatStatus: 'ACTIVE', connected: 0 }
+  ]
+};
+
+let selectedElectionAlgo = 'BULLY';
+let electionAnimationPackets = [];
+let electionCanvasAnimId = null;
+
+// Node coordinates for 550x350 Canvas
+const ELECTION_NODE_COORDS = {
+  'Peer-1': { x: 95,  y: 185, label: 'Peer-1', id: 1, type: 'P2P' },
+  'Peer-2': { x: 215, y: 95,  label: 'Peer-2', id: 2, type: 'P2P' },
+  'Edge-1': { x: 335, y: 95,  label: 'Edge-1', id: 3, type: 'Edge' },
+  'CDN-1':  { x: 455, y: 185, label: 'CDN-1',  id: 4, type: 'CDN' }
+};
+
+// Update Stream & Client Context on Election Lab page
+function updateElectionContext() {
+  const isLive = activeStream && activeStream.status === 'LIVE';
+  if (ctxStreamStatus) {
+    ctxStreamStatus.textContent = isLive ? 'LIVE' : 'OFFLINE';
+    ctxStreamStatus.className = isLive ? 'text-success' : 'text-danger';
+  }
+  if (electionStreamStatusPill) {
+    electionStreamStatusPill.textContent = isLive ? 'Stream: LIVE' : 'Stream: OFFLINE';
+    electionStreamStatusPill.className = isLive ? 'badge green' : 'badge grey';
+  }
+  if (electionStreamPulse) {
+    electionStreamPulse.className = isLive ? 'live-dot-pulse' : 'live-dot-pulse offline';
+  }
+  if (ctxVideoName) {
+    ctxVideoName.textContent = (activeStream && (activeStream.videoName || activeStream.filename)) || 'sample_live_video.mp4';
+  }
+
+  // Active clients & allocations
+  const activeSessions = (clientsState || []).filter(s => s.status === 'STREAMING');
+  if (ctxActiveClients) {
+    ctxActiveClients.textContent = activeSessions.length;
+  }
+  if (ctxCurrentCoordinator) {
+    ctxCurrentCoordinator.textContent = `${currentElectionState.currentCoordinator || 'CDN-1'} (ID: ${currentElectionState.coordinatorElectionId || 4})`;
+  }
+
+  if (ctxAllocationsList) {
+    if (activeSessions.length === 0) {
+      ctxAllocationsList.innerHTML = '<span class="chip text-muted font-italic">No active client streams</span>';
+    } else {
+      ctxAllocationsList.innerHTML = activeSessions.map(s => {
+        return `<span class="chip"><strong>${s.client_id}</strong> → <span class="text-primary">${s.current_source || 'Auto'}</span></span>`;
+      }).join(' ');
+    }
+  }
+}
+
+// Append formatted message to Election Console
+function appendElectionLog(logLine) {
+  if (!electionConsoleLogs) return;
+  const p = document.createElement('div');
+  p.className = 'log-line';
+
+  if (logLine.includes('[FAILURE DETECTOR]') || logLine.includes('[NODE FAILURE]')) {
+    p.classList.add('log-error');
+  } else if (logLine.includes('NEW COORDINATOR') || logLine.includes('[COORDINATOR]')) {
+    p.classList.add('log-success');
+  } else if (logLine.includes('[ELECTION][BULLY]') || logLine.includes('[ELECTION][RING]')) {
+    p.classList.add('log-info');
+  }
+
+  p.textContent = logLine;
+  electionConsoleLogs.appendChild(p);
+  electionConsoleLogs.scrollTop = electionConsoleLogs.scrollHeight;
+}
+
+// Update Election State UI
+function updateElectionState(state) {
+  if (!state) return;
+  currentElectionState = { ...currentElectionState, ...state };
+
+  // Coordinator Badge
+  const coord = currentElectionState.currentCoordinator || 'CDN-1';
+  const coordId = currentElectionState.coordinatorElectionId || 4;
+  if (electionActiveCoordinatorBadge) {
+    electionActiveCoordinatorBadge.textContent = `COORDINATOR: ${coord} (ID ${coordId})`;
+  }
+  if (topologyCurrentWinnerBadge) {
+    topologyCurrentWinnerBadge.textContent = `Leader: ${coord} (ID ${coordId})`;
+  }
+  if (ctxCurrentCoordinator) {
+    ctxCurrentCoordinator.textContent = `${coord} (ID: ${coordId})`;
+  }
+
+  // Algorithm indicators & buttons
+  selectedElectionAlgo = currentElectionState.currentAlgorithm || 'BULLY';
+  if (electionAlgoIndicator) {
+    electionAlgoIndicator.textContent = `${selectedElectionAlgo} ALGORITHM`;
+  }
+  if (btnSelectBully && btnSelectRing) {
+    if (selectedElectionAlgo === 'BULLY') {
+      btnSelectBully.classList.add('active');
+      btnSelectRing.classList.remove('active');
+    } else {
+      btnSelectRing.classList.add('active');
+      btnSelectBully.classList.remove('active');
+    }
+  }
+
+  // Auto Election button
+  if (btnToggleAutoElection) {
+    if (currentElectionState.autoElection) {
+      btnToggleAutoElection.textContent = 'AUTO ELECTION: ON';
+      btnToggleAutoElection.className = 'btn btn-sm btn-success';
+    } else {
+      btnToggleAutoElection.textContent = 'AUTO ELECTION: OFF';
+      btnToggleAutoElection.className = 'btn btn-sm btn-grey';
+    }
+  }
+
+  // Recovery policy buttons
+  if (btnPolicyKeep && btnPolicyTrigger) {
+    if (currentElectionState.recoveryPolicy === 'TRIGGER_ELECTION') {
+      btnPolicyTrigger.classList.add('active');
+      btnPolicyKeep.classList.remove('active');
+    } else {
+      btnPolicyKeep.classList.add('active');
+      btnPolicyTrigger.classList.remove('active');
+    }
+  }
+
+  // Coordinator Failure Banner
+  if (electionFailureBanner) {
+    if (currentElectionState.coordinatorFailureDetected) {
+      electionFailureBanner.classList.remove('hidden');
+      if (electionFailureBannerMsg) {
+        electionFailureBannerMsg.textContent = `Coordinator ${coord} is OFFLINE. Select an initiator below to start an election, or enable Auto Election.`;
+      }
+    } else {
+      electionFailureBanner.classList.add('hidden');
+    }
+  }
+
+  // Running status on Start button
+  if (btnStartElection) {
+    if (currentElectionState.isElectionRunning) {
+      btnStartElection.disabled = true;
+      btnStartElection.textContent = 'Election Running...';
+    } else {
+      btnStartElection.disabled = false;
+      btnStartElection.textContent = 'Start Election';
+    }
+  }
+
+  // Render Node Cards & Update Initiator Dropdown
+  renderElectionNodeCards(currentElectionState.nodes || []);
+  updateInitiatorOptions(currentElectionState.nodes || []);
+
+  // Update Last Metrics if available
+  if (currentElectionState.lastBullyResult || currentElectionState.lastRingResult) {
+    const lastRes = selectedElectionAlgo === 'BULLY'
+      ? (currentElectionState.lastBullyResult || currentElectionState.lastRingResult)
+      : (currentElectionState.lastRingResult || currentElectionState.lastBullyResult);
+    if (lastRes) updateLastMetricsUI(lastRes);
+  }
+
+  updateComparisonUI(currentElectionState.lastBullyResult, currentElectionState.lastRingResult);
+  updateElectionContext();
+}
+
+// Update Initiator select options (only online nodes)
+function updateInitiatorOptions(nodes) {
+  if (!electionInitiatorSelect) return;
+  const currentVal = electionInitiatorSelect.value;
+  const onlineNodes = nodes.filter(n => n.online);
+
+  electionInitiatorSelect.innerHTML = onlineNodes.map(n => {
+    return `<option value="${n.id}">${n.name || n.id} (ID ${n.electionId}, ${n.type || 'Node'})</option>`;
+  }).join('');
+
+  if (onlineNodes.some(n => n.id === currentVal)) {
+    electionInitiatorSelect.value = currentVal;
+  } else if (onlineNodes.length > 0) {
+    electionInitiatorSelect.value = onlineNodes[0].id;
+  }
+}
+
+// Render Distributed Node Cards
+function renderElectionNodeCards(nodes) {
+  if (!electionNodesGrid) return;
+  electionNodesGrid.innerHTML = '';
+
+  nodes.forEach(node => {
+    const isCoord = (node.id === currentElectionState.currentCoordinator && node.online);
+    const card = document.createElement('div');
+    card.className = `node-election-card ${isCoord ? 'coordinator-card' : ''} ${!node.online ? 'offline-card' : ''}`;
+    card.id = `node-card-${node.id}`;
+
+    const pulseClass = node.online ? 'live-dot-pulse' : 'live-dot-pulse offline';
+    const statusText = node.online ? 'ONLINE' : 'OFFLINE';
+    const statusBadge = node.online ? 'badge green' : 'badge red';
+    const roleBadge = isCoord 
+      ? '<span class="badge gold">👑 COORDINATOR</span>' 
+      : '<span class="badge grey">CANDIDATE</span>';
+
+    // Serving clients count from sourcesState or sessions
+    const matchingSource = (sourcesState || []).find(s => s.id === node.id);
+    const servingClients = matchingSource ? matchingSource.connected : (node.connected || 0);
+
+    card.innerHTML = `
+      <div class="node-card-header">
+        <div class="node-title-group">
+          <h4>${node.name || node.id}</h4>
+          <span class="node-type-label">${node.type || 'Node'} • Election ID: <strong>${node.electionId}</strong></span>
+        </div>
+        ${roleBadge}
+      </div>
+
+      <div class="node-metrics-list">
+        <div class="node-metric-row">
+          <span class="text-secondary">Status:</span>
+          <span class="${statusBadge}">${statusText}</span>
+        </div>
+        <div class="node-metric-row">
+          <span class="text-secondary">Serving Clients:</span>
+          <strong class="text-primary">${servingClients}</strong>
+        </div>
+        <div class="node-metric-row">
+          <span class="text-secondary">Heartbeat:</span>
+          <span class="heartbeat-status-badge">
+            <span class="${pulseClass}"></span>
+            <span class="${node.online ? 'text-success' : 'text-danger'}">${node.heartbeatStatus || (node.online ? 'ACTIVE' : 'LOST')}</span>
+          </span>
+        </div>
+      </div>
+
+      <button class="btn btn-sm ${node.online ? 'btn-danger' : 'btn-success'} node-action-btn" data-node="${node.id}">
+        ${node.online ? `Fail ${node.id}` : `Recover ${node.id}`}
+      </button>
+    `;
+
+    // Fail / Recover button handler
+    const btn = card.querySelector('.node-action-btn');
+    if (btn) {
+      btn.addEventListener('click', () => {
+        btn.disabled = true;
+        btn.textContent = 'Processing...';
+        const action = node.online ? 'fail' : 'recover';
+        fetch(apiUrl(`/api/election/nodes/${node.id}/${action}`), { method: 'POST' })
+          .then(r => r.json())
+          .then(res => {
+            if (res.state) updateElectionState(res.state);
+          })
+          .catch(err => console.error(`Node ${action} error:`, err))
+          .finally(() => { btn.disabled = false; });
+      });
+    }
+
+    electionNodesGrid.appendChild(card);
+  });
+}
+
+// Update Last Execution Metrics HUD
+function updateLastMetricsUI(res) {
+  if (!res) return;
+  if (emAlgorithm) emAlgorithm.textContent = res.algorithm || '-';
+  if (emInitiator) emInitiator.textContent = res.initiator || '-';
+  if (emPrevCoord) emPrevCoord.textContent = res.previous_coordinator || '-';
+  if (emNewCoord) emNewCoord.textContent = `${res.new_coordinator} (ID ${res.new_coordinator_id || ''})`;
+  if (emDuration) emDuration.textContent = `${res.duration_ms || 0} ms`;
+  if (emTotalMsgs) emTotalMsgs.textContent = res.message_count || 0;
+
+  if (emBreakdown) {
+    if (res.breakdown) {
+      emBreakdown.textContent = `ELECTION: ${res.breakdown.election || 0}, OK: ${res.breakdown.ok || 0}, COORD: ${res.breakdown.coordinator || 0}`;
+    } else {
+      emBreakdown.textContent = `${res.message_count || 0} Token Hops`;
+    }
+  }
+
+  if (emTokenRoute) {
+    if (res.token_route && res.token_route.length > 0) {
+      emTokenRoute.textContent = res.token_route.join(' → ');
+    } else {
+      emTokenRoute.textContent = 'N/A (Mesh Bully Broadcast)';
+    }
+  }
+}
+
+// Update Comparison Table
+function updateComparisonUI(bully, ring) {
+  if (compBullyMsgs) compBullyMsgs.textContent = bully ? `${bully.message_count} messages` : '-';
+  if (compRingMsgs) compRingMsgs.textContent = ring ? `${ring.message_count} messages` : '-';
+  if (compBullyDur) compBullyDur.textContent = bully ? `${bully.duration_ms} ms` : '-';
+  if (compRingDur) compRingDur.textContent = ring ? `${ring.duration_ms} ms` : '-';
+  if (compBullyWinner) compBullyWinner.textContent = bully ? `${bully.new_coordinator} (ID ${bully.new_coordinator_id || ''})` : '-';
+  if (compRingWinner) compRingWinner.textContent = ring ? `${ring.new_coordinator} (ID ${ring.new_coordinator_id || ''})` : '-';
+}
+
+// Render SQLite Election History Table
+function updateElectionHistoryUI(history) {
+  if (!electionHistoryTableBody) return;
+  if (!history || history.length === 0) {
+    electionHistoryTableBody.innerHTML = '<tr><td colspan="10" class="text-center font-italic text-muted">No election runs recorded yet.</td></tr>';
+    return;
+  }
+
+  electionHistoryTableBody.innerHTML = history.map(item => {
+    const timeStr = item.started_at ? new Date(item.started_at).toLocaleTimeString() : '-';
+    return `
+      <tr>
+        <td><strong>#${item.id}</strong></td>
+        <td><span class="badge ${item.algorithm === 'BULLY' ? 'blue' : 'purple'}">${item.algorithm}</span></td>
+        <td><strong>${item.initiator}</strong></td>
+        <td class="text-secondary">${item.previous_coordinator || '-'}</td>
+        <td class="text-warning"><strong>${item.new_coordinator}</strong></td>
+        <td>${item.duration_ms || 0} ms</td>
+        <td><strong>${item.message_count || 0}</strong></td>
+        <td class="text-muted" style="max-width: 140px; overflow: hidden; text-overflow: ellipsis;">${item.participants || '-'}</td>
+        <td>${timeStr}</td>
+        <td><span class="badge green">${item.status || 'SUCCESS'}</span></td>
+      </tr>
+    `;
+  }).join('');
+}
+
+// Animated Message Packet Spawner
+function triggerMessageAnimation(fromNode, toNode, msgType) {
+  if (!ELECTION_NODE_COORDS[fromNode] || !ELECTION_NODE_COORDS[toNode]) return;
+  electionAnimationPackets.push({
+    from: fromNode,
+    to: toNode,
+    type: msgType,
+    progress: 0,
+    speed: 0.035
+  });
+}
+
+// Draw Election Topology & Animated Packets Canvas
+function drawElectionTopology() {
+  if (!electionTopologyCanvas || !electionTopologyCtx) return;
+  const ctx = electionTopologyCtx;
+  const w = electionTopologyCanvas.width;
+  const h = electionTopologyCanvas.height;
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+
+  ctx.clearRect(0, 0, w, h);
+
+  // Background grid
+  ctx.strokeStyle = isLight ? 'rgba(0, 0, 0, 0.04)' : 'rgba(255, 255, 255, 0.03)';
+  ctx.lineWidth = 1;
+  const gridSize = 25;
+  for (let x = 0; x < w; x += gridSize) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+  }
+  for (let y = 0; y < h; y += gridSize) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+
+  // Draw Topology Links
+  const nodeKeys = ['Peer-1', 'Peer-2', 'Edge-1', 'CDN-1'];
+
+  if (selectedElectionAlgo === 'RING') {
+    // Logical Ring Links: Peer-1 -> Peer-2 -> Edge-1 -> CDN-1 -> Peer-1
+    const ringLinks = [
+      ['Peer-1', 'Peer-2'],
+      ['Peer-2', 'Edge-1'],
+      ['Edge-1', 'CDN-1'],
+      ['CDN-1', 'Peer-1']
+    ];
+
+    ringLinks.forEach(([from, to]) => {
+      const p1 = ELECTION_NODE_COORDS[from];
+      const p2 = ELECTION_NODE_COORDS[to];
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.strokeStyle = isLight ? 'rgba(147, 51, 234, 0.45)' : 'rgba(168, 85, 247, 0.4)';
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([6, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+  } else {
+    // Bully Mesh Links
+    for (let i = 0; i < nodeKeys.length; i++) {
+      for (let j = i + 1; j < nodeKeys.length; j++) {
+        const p1 = ELECTION_NODE_COORDS[nodeKeys[i]];
+        const p2 = ELECTION_NODE_COORDS[nodeKeys[j]];
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.strokeStyle = isLight ? 'rgba(99, 102, 241, 0.2)' : 'rgba(99, 102, 241, 0.15)';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      }
+    }
+  }
+
+  // Draw Active Animated Packets
+  for (let i = electionAnimationPackets.length - 1; i >= 0; i--) {
+    const pkt = electionAnimationPackets[i];
+    pkt.progress += pkt.speed;
+
+    const p1 = ELECTION_NODE_COORDS[pkt.from];
+    const p2 = ELECTION_NODE_COORDS[pkt.to];
+
+    if (p1 && p2) {
+      const curX = p1.x + (p2.x - p1.x) * pkt.progress;
+      const curY = p1.y + (p2.y - p1.y) * pkt.progress;
+
+      let color = '#6366f1';
+      if (pkt.type === 'OK') color = '#10b981';
+      else if (pkt.type === 'COORDINATOR' || pkt.type === 'COORDINATOR_TOKEN') color = '#f59e0b';
+      else if (pkt.type === 'ELECTION_TOKEN') color = '#a855f7';
+
+      // Outer glow
+      ctx.beginPath();
+      ctx.arc(curX, curY, 7, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 10;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Label tag
+      ctx.font = 'bold 9px Outfit, sans-serif';
+      ctx.fillStyle = isLight ? '#0f172a' : '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.fillText(pkt.type, curX, curY - 10);
+    }
+
+    if (pkt.progress >= 1) {
+      electionAnimationPackets.splice(i, 1);
+    }
+  }
+
+  // Draw Nodes
+  nodeKeys.forEach(key => {
+    const coord = ELECTION_NODE_COORDS[key];
+    const nodeData = (currentElectionState.nodes || []).find(n => n.id === key) || {};
+    const isOnline = nodeData.online !== false;
+    const isCoord = (key === currentElectionState.currentCoordinator && isOnline);
+
+    // Halo for coordinator
+    if (isCoord) {
+      ctx.beginPath();
+      ctx.arc(coord.x, coord.y, 34, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.12)';
+      ctx.fill();
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    // Node Circle
+    ctx.beginPath();
+    ctx.arc(coord.x, coord.y, 24, 0, Math.PI * 2);
+    ctx.fillStyle = isLight 
+      ? (isCoord ? '#fffbeb' : (isOnline ? '#f0fdf4' : '#fef2f2'))
+      : (isCoord ? 'rgba(245, 158, 11, 0.25)' : (isOnline ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)'));
+    ctx.fill();
+
+    ctx.strokeStyle = isCoord 
+      ? '#f59e0b' 
+      : (isOnline ? '#10b981' : '#ef4444');
+    ctx.lineWidth = isCoord ? 3 : 2;
+    ctx.stroke();
+
+    // Node Label
+    ctx.font = 'bold 11px Outfit, sans-serif';
+    ctx.fillStyle = isLight ? '#0f172a' : '#f8fafc';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(coord.label, coord.x, coord.y - 2);
+
+    // ID tag inside node
+    ctx.font = '9px Outfit, sans-serif';
+    ctx.fillStyle = isLight ? '#64748b' : '#94a3b8';
+    ctx.fillText(`ID: ${coord.id}`, coord.x, coord.y + 11);
+
+    // Role / Status indicator below node
+    ctx.font = 'bold 9px Outfit, sans-serif';
+    if (isCoord) {
+      ctx.fillStyle = '#f59e0b';
+      ctx.fillText('👑 LEADER', coord.x, coord.y + 36);
+    } else if (!isOnline) {
+      ctx.fillStyle = '#ef4444';
+      ctx.fillText('OFFLINE', coord.x, coord.y + 36);
+    } else {
+      ctx.fillStyle = isLight ? '#475569' : '#9ca3af';
+      ctx.fillText(coord.type, coord.x, coord.y + 36);
+    }
+  });
+
+  electionCanvasAnimId = requestAnimationFrame(drawElectionTopology);
+}
+
+// Event Listeners for Election Controls
+if (btnSelectBully) {
+  btnSelectBully.addEventListener('click', () => {
+    selectedElectionAlgo = 'BULLY';
+    btnSelectBully.classList.add('active');
+    btnSelectRing.classList.remove('active');
+    if (electionAlgoIndicator) electionAlgoIndicator.textContent = 'BULLY ALGORITHM';
+  });
+}
+
+if (btnSelectRing) {
+  btnSelectRing.addEventListener('click', () => {
+    selectedElectionAlgo = 'RING';
+    btnSelectRing.classList.add('active');
+    btnSelectBully.classList.remove('active');
+    if (electionAlgoIndicator) electionAlgoIndicator.textContent = 'RING ALGORITHM';
+  });
+}
+
+if (btnToggleAutoElection) {
+  btnToggleAutoElection.addEventListener('click', () => {
+    const nextAuto = !currentElectionState.autoElection;
+    fetch(apiUrl('/api/election/config'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autoElection: nextAuto })
+    })
+    .then(r => r.json())
+    .then(res => { if (res.state) updateElectionState(res.state); })
+    .catch(err => console.error(err));
+  });
+}
+
+if (btnPolicyKeep) {
+  btnPolicyKeep.addEventListener('click', () => {
+    fetch(apiUrl('/api/election/config'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recoveryPolicy: 'KEEP' })
+    })
+    .then(r => r.json())
+    .then(res => { if (res.state) updateElectionState(res.state); });
+  });
+}
+
+if (btnPolicyTrigger) {
+  btnPolicyTrigger.addEventListener('click', () => {
+    fetch(apiUrl('/api/election/config'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recoveryPolicy: 'TRIGGER_ELECTION' })
+    })
+    .then(r => r.json())
+    .then(res => { if (res.state) updateElectionState(res.state); });
+  });
+}
+
+if (electionSpeedSlider) {
+  electionSpeedSlider.addEventListener('input', (e) => {
+    const val = Number(e.target.value);
+    if (electionSpeedLbl) electionSpeedLbl.textContent = `${val} ms`;
+  });
+  electionSpeedSlider.addEventListener('change', (e) => {
+    fetch(apiUrl('/api/election/config'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messageDelayMs: Number(e.target.value) })
+    }).catch(err => console.error(err));
+  });
+}
+
+if (btnStartElection) {
+  btnStartElection.addEventListener('click', () => {
+    const initiator = electionInitiatorSelect ? electionInitiatorSelect.value : 'Peer-1';
+    btnStartElection.disabled = true;
+    btnStartElection.textContent = 'Starting Election...';
+
+    fetch(apiUrl('/api/election/start'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ algorithm: selectedElectionAlgo, initiatorId: initiator })
+    })
+    .then(r => r.json())
+    .then(res => {
+      if (!res.success) {
+        alert(`Election error: ${res.error}`);
+        btnStartElection.disabled = false;
+        btnStartElection.textContent = 'Start Election';
+      }
+    })
+    .catch(err => {
+      alert(`Network error: ${err.message}`);
+      btnStartElection.disabled = false;
+      btnStartElection.textContent = 'Start Election';
+    });
+  });
+}
+
+if (btnResetElection) {
+  btnResetElection.addEventListener('click', () => {
+    fetch(apiUrl('/api/election/reset'), { method: 'POST' })
+      .then(r => r.json())
+      .then(res => {
+        if (res.state) updateElectionState(res.state);
+      })
+      .catch(err => console.error(err));
+  });
+}
+
+if (btnClearElectionLogs) {
+  btnClearElectionLogs.addEventListener('click', () => {
+    if (electionConsoleLogs) electionConsoleLogs.innerHTML = '';
+  });
+}
+
+if (btnRefreshElectionHistory) {
+  btnRefreshElectionHistory.addEventListener('click', () => {
+    fetch(apiUrl('/api/election/history'))
+      .then(r => r.json())
+      .then(res => {
+        if (res.history) updateElectionHistoryUI(res.history);
+      })
+      .catch(err => console.error(err));
+  });
+}
+
+// Socket.io Real-Time Election Event Listeners
+socket.on('election:state', (state) => {
+  updateElectionState(state);
+});
+
+socket.on('election:heartbeat', (data) => {
+  if (data && data.nodes) {
+    currentElectionState.nodes = data.nodes;
+    currentElectionState.currentCoordinator = data.coordinator;
+    currentElectionState.coordinatorFailureDetected = data.coordinatorFailureDetected;
+    renderElectionNodeCards(data.nodes);
+    updateInitiatorOptions(data.nodes);
+
+    if (electionFailureBanner) {
+      if (data.coordinatorFailureDetected) {
+        electionFailureBanner.classList.remove('hidden');
+        if (electionFailureBannerMsg) {
+          electionFailureBannerMsg.textContent = `Coordinator ${data.coordinator} is OFFLINE. Select an initiator below to start an election, or enable Auto Election.`;
+        }
+      } else {
+        electionFailureBanner.classList.add('hidden');
+      }
+    }
+  }
+});
+
+socket.on('election:coordinator-failed', (data) => {
+  currentElectionState.coordinatorFailureDetected = true;
+  if (electionFailureBanner) {
+    electionFailureBanner.classList.remove('hidden');
+    if (electionFailureBannerMsg) {
+      electionFailureBannerMsg.textContent = `Coordinator ${data.previousCoordinator} heartbeat lost! Failure detected by distributed nodes.`;
+    }
+  }
+});
+
+socket.on('election:started', (data) => {
+  currentElectionState.isElectionRunning = true;
+  if (btnStartElection) {
+    btnStartElection.disabled = true;
+    btnStartElection.textContent = 'Election In Progress...';
+  }
+  appendElectionLog(`[ELECTION STARTED] Algorithm: ${data.algorithm}, Initiator: ${data.initiatorId}`);
+});
+
+socket.on('election:message', (msg) => {
+  triggerMessageAnimation(msg.from, msg.to, msg.type);
+});
+
+socket.on('election:coordinator', (data) => {
+  currentElectionState.currentCoordinator = data.coordinatorId;
+  currentElectionState.coordinatorElectionId = data.coordinatorElectionId;
+  currentElectionState.coordinatorFailureDetected = false;
+
+  if (electionActiveCoordinatorBadge) {
+    electionActiveCoordinatorBadge.textContent = `COORDINATOR: ${data.coordinatorId} (ID ${data.coordinatorElectionId})`;
+  }
+  if (topologyCurrentWinnerBadge) {
+    topologyCurrentWinnerBadge.textContent = `Leader: ${data.coordinatorId} (ID ${data.coordinatorElectionId})`;
+  }
+  if (electionFailureBanner) {
+    electionFailureBanner.classList.add('hidden');
+  }
+
+  appendElectionLog(`[NEW COORDINATOR] ${data.coordinatorId} (ID ${data.coordinatorElectionId}) successfully elected leader.`);
+});
+
+socket.on('election:completed', (record) => {
+  currentElectionState.isElectionRunning = false;
+  if (btnStartElection) {
+    btnStartElection.disabled = false;
+    btnStartElection.textContent = 'Start Election';
+  }
+
+  updateLastMetricsUI(record);
+
+  if (record.algorithm === 'BULLY') {
+    currentElectionState.lastBullyResult = record;
+  } else {
+    currentElectionState.lastRingResult = record;
+  }
+  updateComparisonUI(currentElectionState.lastBullyResult, currentElectionState.lastRingResult);
+
+  // Fetch updated history
+  fetch(apiUrl('/api/election/history'))
+    .then(r => r.json())
+    .then(res => { if (res.history) updateElectionHistoryUI(res.history); })
+    .catch(() => {});
+});
+
+socket.on('election:node-failed', (data) => {
+  appendElectionLog(`[NODE FAILURE] ${data.nodeId} went OFFLINE.`);
+  if (data.nodes) renderElectionNodeCards(data.nodes);
+});
+
+socket.on('election:node-recovered', (data) => {
+  appendElectionLog(`[NODE RECOVERY] ${data.nodeId} RECOVERED (ONLINE).`);
+  if (data.nodes) renderElectionNodeCards(data.nodes);
+});
+
+socket.on('election_log', (logStr) => {
+  appendElectionLog(logStr);
+});
+
+// Initial Fetch on Admin load
+fetch(apiUrl('/api/election/state'))
+  .then(r => r.json())
+  .then(state => {
+    updateElectionState(state);
+  })
+  .catch(() => {});
+
+fetch(apiUrl('/api/election/history'))
+  .then(r => r.json())
+  .then(res => {
+    if (res.history) updateElectionHistoryUI(res.history);
+  })
+  .catch(() => {});
+
+// Start Topology Animation
+if (electionTopologyCanvas) {
+  drawElectionTopology();
+}
+
 // Initialize active route after all DOM elements and canvas contexts are ready
 initRouteOnLoad();
+
 
 

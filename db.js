@@ -25,7 +25,9 @@ const memStore = {
   },
   clientSessions: new Map(),
   sourceAllocations: [],
-  sourceSwitches: []
+  sourceSwitches: [],
+  electionHistory: [],
+  electionMessages: []
 };
 
 export async function initDB() {
@@ -118,6 +120,32 @@ export async function initDB() {
         new_source_id TEXT,
         switch_time TEXT,
         reason TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS election_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        algorithm TEXT NOT NULL,
+        initiator TEXT NOT NULL,
+        previous_coordinator TEXT,
+        new_coordinator TEXT NOT NULL,
+        reason TEXT,
+        started_at TEXT,
+        completed_at TEXT,
+        duration_ms INTEGER,
+        message_count INTEGER,
+        participants TEXT,
+        status TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS election_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        election_id INTEGER,
+        algorithm TEXT,
+        message_type TEXT,
+        sender TEXT,
+        receiver TEXT,
+        payload TEXT,
+        timestamp TEXT
       );
     `);
 
@@ -477,4 +505,119 @@ export async function getPerformanceMetrics() {
     sourceSwitches: memStore.sourceSwitches.length,
     failedRequests: failedCount
   };
+}
+
+export async function saveElectionRecord(record) {
+  const {
+    algorithm,
+    initiator,
+    previous_coordinator,
+    new_coordinator,
+    reason = 'Coordinator failure detected',
+    started_at,
+    completed_at,
+    duration_ms,
+    message_count,
+    participants,
+    status = 'SUCCESS'
+  } = record;
+
+  const participantsStr = Array.isArray(participants) ? participants.join(', ') : (participants || '');
+
+  if (db) {
+    try {
+      const res = await db.run(
+        `INSERT INTO election_history 
+        (algorithm, initiator, previous_coordinator, new_coordinator, reason, started_at, completed_at, duration_ms, message_count, participants, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [algorithm, initiator, previous_coordinator, new_coordinator, reason, started_at, completed_at, duration_ms, message_count, participantsStr, status]
+      );
+      return res.lastID;
+    } catch (e) {
+      console.warn('[DB] saveElectionRecord fallback:', e.message);
+    }
+  }
+
+  const id = memStore.electionHistory.length + 1;
+  memStore.electionHistory.unshift({
+    id,
+    algorithm,
+    initiator,
+    previous_coordinator,
+    new_coordinator,
+    reason,
+    started_at,
+    completed_at,
+    duration_ms,
+    message_count,
+    participants: participantsStr,
+    status
+  });
+  return id;
+}
+
+export async function saveElectionMessage(msg) {
+  const {
+    election_id,
+    algorithm,
+    message_type,
+    sender,
+    receiver,
+    payload,
+    timestamp = new Date().toISOString()
+  } = msg;
+
+  const payloadStr = typeof payload === 'object' ? JSON.stringify(payload) : String(payload || '');
+
+  if (db) {
+    try {
+      await db.run(
+        `INSERT INTO election_messages (election_id, algorithm, message_type, sender, receiver, payload, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [election_id || null, algorithm, message_type, sender, receiver, payloadStr, timestamp]
+      );
+      return;
+    } catch (e) {
+      console.warn('[DB] saveElectionMessage fallback:', e.message);
+    }
+  }
+
+  memStore.electionMessages.push({
+    id: memStore.electionMessages.length + 1,
+    election_id: election_id || null,
+    algorithm,
+    message_type,
+    sender,
+    receiver,
+    payload: payloadStr,
+    timestamp
+  });
+}
+
+export async function getElectionHistory(limit = 20) {
+  if (db) {
+    try {
+      return await db.all("SELECT * FROM election_history ORDER BY id DESC LIMIT ?", [limit]);
+    } catch (e) {
+      console.warn('[DB] getElectionHistory fallback:', e.message);
+    }
+  }
+  return memStore.electionHistory.slice(0, limit);
+}
+
+export async function getElectionMessages(electionId = null, limit = 50) {
+  if (db) {
+    try {
+      if (electionId) {
+        return await db.all("SELECT * FROM election_messages WHERE election_id = ? ORDER BY id ASC LIMIT ?", [electionId, limit]);
+      }
+      return await db.all("SELECT * FROM election_messages ORDER BY id DESC LIMIT ?", [limit]);
+    } catch (e) {
+      console.warn('[DB] getElectionMessages fallback:', e.message);
+    }
+  }
+  if (electionId) {
+    return memStore.electionMessages.filter(m => m.election_id === electionId).slice(0, limit);
+  }
+  return memStore.electionMessages.slice(-limit);
 }

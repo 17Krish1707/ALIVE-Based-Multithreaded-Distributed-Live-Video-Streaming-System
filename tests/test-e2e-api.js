@@ -81,6 +81,35 @@ setTimeout(async () => {
     assert.strictEqual(resDisconnect.body.success, true);
     console.log('✓ POST /api/admin/clients/:clientId/disconnect executed successfully.');
 
+    console.log('\n--- TEST 7: GET /api/election/state ---');
+    const resElectionState = await req('/api/election/state');
+    assert.strictEqual(resElectionState.status, 200);
+    assert.strictEqual(resElectionState.body.currentCoordinator, 'CDN-1');
+    assert.strictEqual(resElectionState.body.nodes.length, 4);
+    console.log('✓ GET /api/election/state returned 4 nodes with CDN-1 coordinator.');
+
+    console.log('\n--- TEST 8: POST /api/election/config ---');
+    const resConfig = await req('/api/election/config', 'POST', { autoElection: false, recoveryPolicy: 'KEEP', messageDelayMs: 20 });
+    assert.strictEqual(resConfig.status, 200);
+    assert.strictEqual(resConfig.body.state.recoveryPolicy, 'KEEP');
+    console.log('✓ POST /api/election/config updated settings.');
+
+    console.log('\n--- TEST 9: POST /api/election/start (Bully) ---');
+    const resBully = await req('/api/election/start', 'POST', { algorithm: 'BULLY', initiatorId: 'Peer-1' });
+    assert.strictEqual(resBully.status, 200);
+    assert.strictEqual(resBully.body.result.algorithm, 'BULLY');
+    assert.strictEqual(resBully.body.result.new_coordinator, 'CDN-1');
+    console.log(`✓ POST /api/election/start executed Bully with winner ${resBully.body.result.new_coordinator}.`);
+
+    console.log('\n--- TEST 10: GET /api/election/history & comparison ---');
+    const resHist = await req('/api/election/history');
+    assert.strictEqual(resHist.status, 200);
+    assert(resHist.body.history.length > 0);
+
+    const resComp = await req('/api/election/comparison');
+    assert.strictEqual(resComp.status, 200);
+    console.log('✓ GET /api/election/history and comparison endpoints verified.');
+
     console.log('\n====================================================');
     console.log('ALL E2E REST API TESTS PASSED SUCCESSFULLY!');
     console.log('====================================================\n');

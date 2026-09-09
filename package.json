@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "node test-vts.js && node test-multithreading.js"
+    "test": "node test-vts.js && node test-multithreading.js && node tests/test-election.js"
   },
   "keywords": [],
   "author": "",
